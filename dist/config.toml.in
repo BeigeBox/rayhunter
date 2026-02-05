@@ -28,6 +28,15 @@ ntfy_url = ""
 # What notification types to enable. Does nothing if the above ntfy_url is not set.
 enabled_notifications = ["Warning", "LowBattery"]
 
+# Replay Mode (for testing without hardware)
+# Set replay_qmdl_path to replay a captured QMDL file instead of reading from /dev/diag.
+# This allows testing the full analysis pipeline on any platform (macOS, Windows, Linux).
+# The daemon will process the file, generate analysis results, and continue running
+# so you can access the web UI to view results.
+# replay_qmdl_path = "/path/to/capture.qmdl"
+# Replay speed: 0 = as fast as possible (default), 1.0 = attempt realtime pacing
+# replay_speed = 0
+
 # Analyzer Configuration
 # Enable/disable specific IMSI catcher detection heuristics
 # See https://github.com/EFForg/rayhunter/blob/main/doc/heuristics.md for details

@@ -8,6 +8,7 @@ mod key_input;
 mod notifications;
 mod pcap;
 mod qmdl_store;
+mod replay;
 mod server;
 mod stats;
 
@@ -16,7 +17,7 @@ use std::sync::Arc;
 
 use crate::battery::run_battery_notification_worker;
 use crate::config::{parse_args, parse_config};
-use crate::diag::run_diag_read_thread;
+use crate::diag::{run_diag_read_thread, run_replay_read_thread};
 use crate::error::RayhunterError;
 use crate::notifications::{NotificationService, run_notification_worker};
 use crate::pcap::get_pcap;
@@ -214,7 +215,31 @@ async fn run_with_config(
 
     let notification_service = NotificationService::new(config.ntfy_url.clone());
 
-    if !config.debug_mode {
+    // Determine the data source: replay file, real DIAG device, or debug mode (none)
+    if let Some(replay_path) = &config.replay_qmdl_path {
+        // Replay mode: read from a QMDL file instead of /dev/diag
+        info!("Replay mode: reading from {}", replay_path);
+        let replay_dev = replay::QmdlReplayDevice::new(replay_path, config.replay_speed)
+            .await
+            .map_err(|e| RayhunterError::ReplayInitError(e.to_string()))?;
+
+        info!("Starting Replay Thread");
+        run_replay_read_thread(
+            &task_tracker,
+            replay_dev,
+            diag_rx,
+            diag_tx.clone(),
+            ui_update_tx.clone(),
+            qmdl_store_lock.clone(),
+            analysis_tx.clone(),
+            config.analyzers.clone(),
+            notification_service.new_handler(),
+        );
+
+        // Use headless display for replay mode
+        info!("Using headless display for replay mode");
+        display::headless::update_ui(&task_tracker, &config, shutdown_token.clone(), ui_update_rx);
+    } else if !config.debug_mode {
         info!("Using configuration for device: {0:?}", config.device);
         let mut dev = DiagDevice::new(&config.device)
             .await

@@ -20,6 +20,14 @@ pub struct Config {
     pub ntfy_url: Option<String>,
     pub enabled_notifications: Vec<NotificationType>,
     pub analyzers: AnalyzerConfig,
+    /// Path to QMDL file for replay mode (testing without hardware).
+    /// When set, daemon reads from this file instead of /dev/diag.
+    /// This allows testing the full analysis pipeline on any platform.
+    pub replay_qmdl_path: Option<String>,
+    /// Replay speed multiplier: 0 = as fast as possible, 1.0 = attempt realtime pacing.
+    /// Only used when replay_qmdl_path is set.
+    #[serde(default)]
+    pub replay_speed: f32,
 }
 
 impl Default for Config {
@@ -35,6 +43,8 @@ impl Default for Config {
             analyzers: AnalyzerConfig::default(),
             ntfy_url: None,
             enabled_notifications: vec![NotificationType::Warning, NotificationType::LowBattery],
+            replay_qmdl_path: None,
+            replay_speed: 0.0,
         }
     }
 }

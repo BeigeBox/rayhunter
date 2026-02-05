@@ -22,6 +22,8 @@ use rayhunter::diag::{DataType, MessagesContainer};
 use rayhunter::diag_device::DiagDevice;
 use rayhunter::qmdl::QmdlWriter;
 
+use crate::replay::QmdlReplayDevice;
+
 use crate::analysis::{AnalysisCtrlMessage, AnalysisWriter};
 use crate::display;
 use crate::notifications::{Notification, NotificationType};
@@ -296,6 +298,111 @@ pub fn run_diag_read_thread(
                         Err(err) => {
                             error!("error reading diag device: {err}");
                             return Err(err);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Run a thread that reads from a QMDL replay file instead of a real DIAG device.
+/// This enables testing the full analysis pipeline without hardware.
+#[allow(clippy::too_many_arguments)]
+pub fn run_replay_read_thread(
+    task_tracker: &TaskTracker,
+    mut replay_dev: QmdlReplayDevice,
+    mut qmdl_file_rx: Receiver<DiagDeviceCtrlMessage>,
+    qmdl_file_tx: Sender<DiagDeviceCtrlMessage>,
+    ui_update_sender: Sender<display::DisplayState>,
+    qmdl_store_lock: Arc<RwLock<RecordingStore>>,
+    analysis_sender: Sender<AnalysisCtrlMessage>,
+    analyzer_config: AnalyzerConfig,
+    notification_channel: tokio::sync::mpsc::Sender<Notification>,
+) {
+    task_tracker.spawn(async move {
+        let mut diag_stream = pin!(replay_dev.as_stream().into_stream());
+        let mut diag_task = DiagTask::new(
+            ui_update_sender,
+            analysis_sender,
+            analyzer_config,
+            notification_channel,
+        );
+        qmdl_file_tx
+            .send(DiagDeviceCtrlMessage::StartRecording)
+            .await
+            .unwrap();
+        loop {
+            tokio::select! {
+                msg = qmdl_file_rx.recv() => {
+                    match msg {
+                        Some(DiagDeviceCtrlMessage::StartRecording) => {
+                            let mut qmdl_store = qmdl_store_lock.write().await;
+                            diag_task.start(qmdl_store.deref_mut()).await;
+                        },
+                        Some(DiagDeviceCtrlMessage::StopRecording) => {
+                            let mut qmdl_store = qmdl_store_lock.write().await;
+                            diag_task.stop(qmdl_store.deref_mut()).await;
+                        },
+                        Some(DiagDeviceCtrlMessage::Exit) | None => {
+                            info!("Replay reader thread exiting...");
+                            diag_task.stop_current_recording().await;
+                            return Ok(())
+                        },
+                        Some(DiagDeviceCtrlMessage::DeleteEntry { name, response_tx }) => {
+                            let mut qmdl_store = qmdl_store_lock.write().await;
+                            let resp = diag_task.delete_entry(qmdl_store.deref_mut(), name.as_str()).await;
+                            if response_tx.send(resp).is_err() {
+                                error!("Failed to send delete entry response, receiver dropped");
+                            }
+                        },
+                        Some(DiagDeviceCtrlMessage::DeleteAllEntries { response_tx }) => {
+                            let mut qmdl_store = qmdl_store_lock.write().await;
+                            let resp = diag_task.delete_all_entries(qmdl_store.deref_mut()).await;
+                            if response_tx.send(resp).is_err() {
+                                error!("Failed to send delete all entries response, receiver dropped");
+                            }
+                        },
+                    }
+                }
+                maybe_container = diag_stream.next() => {
+                    match maybe_container {
+                        Some(Ok(container)) => {
+                            let mut qmdl_store = qmdl_store_lock.write().await;
+                            diag_task.process_container(qmdl_store.deref_mut(), container).await
+                        },
+                        Some(Err(err)) => {
+                            error!("error reading replay file: {err}");
+                            return Err(err);
+                        },
+                        None => {
+                            // End of replay file reached
+                            info!("Replay file finished, stopping recording...");
+                            let mut qmdl_store = qmdl_store_lock.write().await;
+                            diag_task.stop(qmdl_store.deref_mut()).await;
+                            info!("Replay complete. Server will continue running for UI access.");
+                            // Keep running to allow web UI access to results
+                            loop {
+                                match qmdl_file_rx.recv().await {
+                                    Some(DiagDeviceCtrlMessage::Exit) | None => {
+                                        info!("Replay reader thread exiting after completion...");
+                                        return Ok(())
+                                    },
+                                    Some(DiagDeviceCtrlMessage::DeleteEntry { name, response_tx }) => {
+                                        let mut qmdl_store = qmdl_store_lock.write().await;
+                                        let resp = diag_task.delete_entry(qmdl_store.deref_mut(), name.as_str()).await;
+                                        let _ = response_tx.send(resp);
+                                    },
+                                    Some(DiagDeviceCtrlMessage::DeleteAllEntries { response_tx }) => {
+                                        let mut qmdl_store = qmdl_store_lock.write().await;
+                                        let resp = diag_task.delete_all_entries(qmdl_store.deref_mut()).await;
+                                        let _ = response_tx.send(resp);
+                                    },
+                                    _ => {
+                                        // Ignore start/stop recording after replay ends
+                                    }
+                                }
+                            }
                         }
                     }
                 }
