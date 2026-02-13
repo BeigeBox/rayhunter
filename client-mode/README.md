@@ -40,12 +40,9 @@ we configure as a station (client) using a cross-compiled `wpa_supplicant`.
    EOF
    ```
 
-4. Reboot the device, then trigger the script:
-   ```
-   adb shell "rootshell -c 'printf \"\r\nAT+SYSCMD=sh /data/rayhunter/scripts/run-wifi.sh\r\n\" > /dev/smd8'"
-   ```
-
-5. Wait ~30 seconds, then check the log:
+4. Reboot the device. WiFi client starts automatically on boot (see
+   [Auto-Start on Boot](#auto-start-on-boot)). Wait ~60 seconds for it
+   to connect, then check the log:
    ```
    adb shell cat /tmp/wifi-client.log
    ```
@@ -191,11 +188,66 @@ QCMAP configures iptables with INPUT policy DROP, accepting only on bridge0
 and established connections. The script inserts ACCEPT rules for wlan1 at the
 top of INPUT and FORWARD chains.
 
+### Outbound Firewall
+
+The script blocks all outbound traffic on wlan1 except:
+- **ESTABLISHED/RELATED**: Replies to incoming connections (so the
+  Rayhunter web UI works from your LAN)
+- **DHCP** (UDP 67-68): wlan1 lease renewal
+- **DNS** (UDP/TCP 53): Hostname resolution
+
+This prevents stock Orbic daemons from phoning home:
+- `dmclient` - OMA-DM device management, polls Verizon every ~30s
+  sending the device's IMSI
+- `upgrade` - FOTA firmware update checks
+- `sntp` - NTP time sync
+- Any other stock service with outbound network access
+
+**ntfy notifications**: If you configure `ntfy_url` in Rayhunter's
+`config.toml`, you must uncomment the HTTPS rule in wifi-client.sh
+(or add it manually) to allow outbound port 443:
+```sh
+iptables -A OUTPUT -o wlan1 -p tcp --dport 443 -j ACCEPT
+```
+This line must go before the DROP rule. Note that this also allows
+`dmclient` to reach Verizon via HTTPS -- there is no way to
+distinguish Rayhunter's traffic from other root processes via iptables
+alone.
+
+### Auto-Start on Boot
+
+The rayhunter init script (`/etc/init.d/rayhunter_daemon`) launches
+wifi-client.sh automatically on boot if `/data/rayhunter/wifi-creds.conf`
+exists. It runs in the background so Rayhunter itself starts immediately.
+
+The init script waits up to 30 seconds for wlan1 to appear (the WiFi
+driver loads late in the boot sequence), then runs wifi-client.sh.
+Total time from power-on to WiFi connected is roughly 60 seconds.
+
+**Disabling auto-start:** Delete or rename `wifi-creds.conf`:
+```
+adb shell "mv /data/rayhunter/wifi-creds.conf /data/rayhunter/wifi-creds.conf.disabled"
+```
+Then reboot. The script checks for this file and skips WiFi setup if
+it's missing. This is the safety valve if WiFi setup ever causes issues.
+
+**Re-enabling:** Rename it back:
+```
+adb shell "mv /data/rayhunter/wifi-creds.conf.disabled /data/rayhunter/wifi-creds.conf"
+```
+
+**Manual trigger (alternative):** If auto-start is disabled or you need
+to re-run the script without rebooting, use AT+SYSCMD (one-shot per boot):
+```
+adb shell "rootshell -c 'printf \"\r\nAT+SYSCMD=sh /data/rayhunter/scripts/run-wifi.sh\r\n\" > /dev/smd8'"
+```
+
 ### Runtime-Only Changes
 
-All changes (routes, iptables rules, wpa_supplicant) are runtime-only.
-A reboot restores the default state. The script must be triggered after
-every boot.
+All network changes (routes, iptables rules, wpa_supplicant) are
+runtime-only. A reboot restores the default network state, then
+auto-start re-applies them. This means a power cycle always gives you
+a clean slate if anything goes wrong.
 
 ### SIM + WiFi Coexistence
 

@@ -98,7 +98,21 @@ WPAEOF
     iptables -I INPUT -i "$IFACE" -j ACCEPT
     iptables -I FORWARD -i "$IFACE" -j ACCEPT
 
+    # Block stock Orbic daemons from phoning home (dmclient, upgrade, etc.)
+    # Allow only: replies to incoming connections, DHCP renewal, DNS resolution.
+    # NOTE: If ntfy_url is configured in rayhunter config, add a rule to allow
+    # outbound HTTPS (port 443) so notifications can be sent, e.g.:
+    #   iptables -A OUTPUT -o "$IFACE" -p tcp --dport 443 -j ACCEPT
+    iptables -A OUTPUT -o "$IFACE" -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -A OUTPUT -o "$IFACE" -p udp --dport 67:68 -j ACCEPT
+    iptables -A OUTPUT -o "$IFACE" -p udp --dport 53 -j ACCEPT
+    iptables -A OUTPUT -o "$IFACE" -p tcp --dport 53 -j ACCEPT
+    iptables -A OUTPUT -o "$IFACE" -j DROP
+
     echo 0 > /proc/sys/net/bridge/bridge-nf-call-iptables
+
+    echo "=== iptables OUTPUT ==="
+    iptables -L OUTPUT -v -n 2>&1
 
     echo "=== policy routing ==="
     ip rule show
