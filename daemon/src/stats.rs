@@ -51,6 +51,9 @@ pub struct DiskStats {
     mounted_on: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_bytes: Option<u64>,
+    #[serde(skip)]
+    #[allow(dead_code)]
+    pub total_bytes: Option<u64>,
 }
 
 impl DiskStats {
@@ -85,6 +88,7 @@ impl DiskStats {
             used_percent,
             mounted_on: qmdl_path.to_string(),
             available_bytes: Some(stat.f_bavail as u64 * block_size),
+            total_bytes: Some(stat.f_blocks as u64 * block_size),
         })
     }
 }
@@ -137,7 +141,40 @@ impl MemoryStats {
     }
 }
 
-// turns a number of kilobytes (like 28293) into a human-readable string (like "28.3M")
+#[cfg(feature = "orbic-ui")]
+pub fn read_memory_kb() -> Result<(usize, usize), String> {
+    let contents =
+        std::fs::read_to_string("/proc/meminfo").map_err(|e| format!("read /proc/meminfo: {e}"))?;
+    let mut total = None;
+    let mut available = None;
+    for line in contents.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            total = rest.split_whitespace().next().and_then(|s| s.parse().ok());
+        } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            available = rest.split_whitespace().next().and_then(|s| s.parse().ok());
+        }
+        if total.is_some() && available.is_some() {
+            break;
+        }
+    }
+    Ok((
+        total.ok_or("MemTotal not found in /proc/meminfo")?,
+        available.ok_or("MemAvailable not found in /proc/meminfo")?,
+    ))
+}
+
+#[cfg(feature = "orbic-ui")]
+pub fn read_uptime_secs() -> Result<u64, String> {
+    let contents =
+        std::fs::read_to_string("/proc/uptime").map_err(|e| format!("read /proc/uptime: {e}"))?;
+    let secs_str = contents
+        .split_whitespace()
+        .next()
+        .ok_or("empty /proc/uptime")?;
+    let secs: f64 = secs_str.parse().map_err(|e| format!("parse uptime: {e}"))?;
+    Ok(secs as u64)
+}
+
 fn humanize_kb(kb: usize) -> String {
     if kb < 1000 {
         return format!("{kb}K");

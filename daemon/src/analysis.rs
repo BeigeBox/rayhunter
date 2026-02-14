@@ -8,7 +8,7 @@ use axum::{
 };
 use futures::TryStreamExt;
 use log::{error, info};
-use rayhunter::analysis::analyzer::{AnalyzerConfig, EventType, Harness};
+use rayhunter::analysis::analyzer::{AnalyzerConfig, CellInfo, EventType, Harness};
 use rayhunter::diag::{DataType, MessagesContainer};
 use rayhunter::qmdl::QmdlReader;
 use serde::Serialize;
@@ -21,9 +21,23 @@ use tokio_util::task::TaskTracker;
 use crate::qmdl_store::RecordingStore;
 use crate::server::ServerState;
 
+pub struct LastEventInfo {
+    pub analyzer_name: String,
+    pub severity: EventType,
+    pub time: Option<String>,
+}
+
+pub struct AnalysisSummary {
+    pub max_type: EventType,
+    pub event_counts: [u32; 4],
+    pub last_event: Option<LastEventInfo>,
+    pub cell_info: CellInfo,
+}
+
 pub struct AnalysisWriter {
     writer: BufWriter<File>,
     harness: Harness,
+    analyzer_names: Vec<String>,
 }
 
 // We write our analysis results to a file immediately to minimize the amount of
@@ -35,31 +49,55 @@ pub struct AnalysisWriter {
 impl AnalysisWriter {
     pub async fn new(file: File, analyzer_config: &AnalyzerConfig) -> Result<Self, std::io::Error> {
         let harness = Harness::new_with_config(analyzer_config);
+        let analyzer_names = harness
+            .get_metadata()
+            .analyzers
+            .iter()
+            .map(|a| a.name.clone())
+            .collect();
 
         let mut result = Self {
             writer: BufWriter::new(file),
             harness,
+            analyzer_names,
         };
         let metadata = result.harness.get_metadata();
         result.write(&metadata).await?;
         Ok(result)
     }
 
-    // Runs the analysis harness on the given container, serializing the results
-    // to the analysis file, returning the whether any warnings were detected
     pub async fn analyze(
         &mut self,
         container: MessagesContainer,
-    ) -> Result<EventType, std::io::Error> {
-        let mut max_type = EventType::Informational;
+    ) -> Result<AnalysisSummary, std::io::Error> {
+        let mut summary = AnalysisSummary {
+            max_type: EventType::Informational,
+            event_counts: [0; 4],
+            last_event: None,
+            cell_info: CellInfo::default(),
+        };
 
-        for row in self.harness.analyze_qmdl_messages(container) {
+        let (rows, cell_info) = self.harness.analyze_qmdl_messages(container);
+        summary.cell_info = cell_info;
+        for row in rows {
             if !row.is_empty() {
                 self.write(&row).await?;
             }
-            max_type = cmp::max(max_type, row.get_max_event_type());
+            for (i, maybe_event) in row.events.iter().enumerate() {
+                if let Some(event) = maybe_event {
+                    summary.event_counts[event.event_type as usize] += 1;
+                    summary.max_type = cmp::max(summary.max_type, event.event_type);
+                    if event.event_type > EventType::Informational {
+                        summary.last_event = Some(LastEventInfo {
+                            analyzer_name: self.analyzer_names.get(i).cloned().unwrap_or_default(),
+                            severity: event.event_type,
+                            time: row.packet_timestamp.map(|t| t.format("%H:%M").to_string()),
+                        });
+                    }
+                }
+            }
         }
-        Ok(max_type)
+        Ok(summary)
     }
 
     async fn write<T: Serialize>(&mut self, value: &T) -> Result<(), std::io::Error> {

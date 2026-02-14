@@ -17,12 +17,12 @@ use tokio::sync::{RwLock, oneshot};
 use tokio_stream::wrappers::LinesStream;
 use tokio_util::task::TaskTracker;
 
-use rayhunter::analysis::analyzer::{AnalysisLineNormalizer, AnalyzerConfig, EventType};
+use rayhunter::analysis::analyzer::{AnalysisLineNormalizer, AnalyzerConfig, CellInfo, EventType};
 use rayhunter::diag::{DataType, MessagesContainer};
 use rayhunter::diag_device::DiagDevice;
 use rayhunter::qmdl::QmdlWriter;
 
-use crate::analysis::{AnalysisCtrlMessage, AnalysisWriter};
+use crate::analysis::{AnalysisCtrlMessage, AnalysisSummary, AnalysisWriter};
 use crate::display;
 use crate::notifications::{Notification, NotificationType};
 use crate::qmdl_store::{RecordingStore, RecordingStoreError};
@@ -57,6 +57,14 @@ pub struct DiagTask {
     max_type_seen: EventType,
     bytes_since_space_check: usize,
     low_space_warned: bool,
+    event_counts: [u32; 4],
+    last_event_name: Option<String>,
+    last_event_time: Option<String>,
+    last_event_severity: Option<EventType>,
+    #[cfg(feature = "orbic-ui")]
+    device_info: Option<Arc<RwLock<display::DeviceInfo>>>,
+    #[cfg(feature = "orbic-ui")]
+    device_notify: Option<Arc<tokio::sync::Notify>>,
 }
 
 enum DiagState {
@@ -94,6 +102,7 @@ fn check_disk_space(path: &std::path::Path, warning_mb: u64, critical_mb: u64) -
 }
 
 impl DiagTask {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         ui_update_sender: Sender<display::DisplayState>,
         analysis_sender: Sender<AnalysisCtrlMessage>,
@@ -101,6 +110,8 @@ impl DiagTask {
         notification_channel: tokio::sync::mpsc::Sender<Notification>,
         min_space_to_start_mb: u64,
         min_space_to_continue_mb: u64,
+        #[cfg(feature = "orbic-ui")] device_info: Option<Arc<RwLock<display::DeviceInfo>>>,
+        #[cfg(feature = "orbic-ui")] device_notify: Option<Arc<tokio::sync::Notify>>,
     ) -> Self {
         Self {
             ui_update_sender,
@@ -113,6 +124,24 @@ impl DiagTask {
             max_type_seen: EventType::Informational,
             bytes_since_space_check: 0,
             low_space_warned: false,
+            event_counts: [0; 4],
+            last_event_name: None,
+            last_event_time: None,
+            last_event_severity: None,
+            #[cfg(feature = "orbic-ui")]
+            device_info,
+            #[cfg(feature = "orbic-ui")]
+            device_notify,
+        }
+    }
+
+    #[cfg(feature = "orbic-ui")]
+    async fn update_device_info_state(&mut self, state: display::DisplayState) {
+        if let Some(ref di) = self.device_info {
+            di.write().await.display_state = state;
+        }
+        if let Some(ref n) = self.device_notify {
+            n.notify_one();
         }
     }
 
@@ -121,6 +150,10 @@ impl DiagTask {
         self.max_type_seen = EventType::Informational;
         self.bytes_since_space_check = 0;
         self.low_space_warned = false;
+        self.event_counts = [0; 4];
+        self.last_event_name = None;
+        self.last_event_time = None;
+        self.last_event_severity = None;
 
         match check_disk_space(
             &qmdl_store.path,
@@ -171,6 +204,22 @@ impl DiagTask {
         {
             warn!("couldn't send ui update message: {e}");
         }
+        #[cfg(feature = "orbic-ui")]
+        if let Some(ref di) = self.device_info {
+            let mut info = di.write().await;
+            info.display_state = display::DisplayState::Recording;
+            info.event_counts = [0; 4];
+            info.last_event_time = None;
+            info.last_event_name = None;
+            info.last_event_severity = None;
+            info.low_disk = false;
+            info.stopped_reason = None;
+            info.wake_display = false;
+        }
+        #[cfg(feature = "orbic-ui")]
+        if let Some(ref n) = self.device_notify {
+            n.notify_one();
+        }
         Ok(())
     }
 
@@ -202,6 +251,9 @@ impl DiagTask {
         {
             warn!("couldn't send ui update message: {e}");
         }
+        #[cfg(feature = "orbic-ui")]
+        self.update_device_info_state(display::DisplayState::Paused)
+            .await;
     }
 
     async fn delete_entry(
@@ -254,8 +306,6 @@ impl DiagTask {
             debug!("skipping non-userspace diag messages...");
             return;
         }
-        // keep track of how many bytes were written to the QMDL file so we can read
-        // a valid block of data from it in the HTTP server
         if let DiagState::Recording {
             qmdl_writer,
             analysis_writer,
@@ -284,10 +334,21 @@ impl DiagTask {
                             .await
                             .ok();
 
+                        #[cfg(feature = "orbic-ui")]
+                        if let Some(ref di) = self.device_info {
+                            let mut info = di.write().await;
+                            info.stopped_reason = Some(display::StoppedReason::DiskFull);
+                            info.low_disk = true;
+                        }
+
                         self.stop(qmdl_store, Some(reason)).await;
                         return;
                     }
                     DiskSpaceCheck::Warning(mb) => {
+                        #[cfg(feature = "orbic-ui")]
+                        if let Some(ref di) = self.device_info {
+                            di.write().await.low_disk = true;
+                        }
                         if !self.low_space_warned {
                             self.low_space_warned = true;
                             warn!("Disk space low: {}MB remaining", mb);
@@ -301,13 +362,24 @@ impl DiagTask {
                                 .ok();
                         }
                     }
-                    _ => {}
+                    DiskSpaceCheck::Ok(_) =>
+                    {
+                        #[cfg(feature = "orbic-ui")]
+                        if let Some(ref di) = self.device_info {
+                            di.write().await.low_disk = false;
+                        }
+                    }
+                    DiskSpaceCheck::Failed => {}
                 }
             }
 
             if let Err(e) = qmdl_writer.write_container(&container).await {
                 let reason = format!("failed to write to QMDL (disk full?): {e}");
                 error!("{reason}");
+                #[cfg(feature = "orbic-ui")]
+                if let Some(ref di) = self.device_info {
+                    di.write().await.stopped_reason = Some(display::StoppedReason::DiskFull);
+                }
                 self.stop(qmdl_store, Some(reason)).await;
                 return;
             }
@@ -324,19 +396,38 @@ impl DiagTask {
             {
                 let reason = format!("failed to update manifest (disk full?): {e}");
                 error!("{reason}");
+                #[cfg(feature = "orbic-ui")]
+                if let Some(ref di) = self.device_info {
+                    di.write().await.stopped_reason = Some(display::StoppedReason::DiskFull);
+                }
                 self.stop(qmdl_store, Some(reason)).await;
                 return;
             }
             debug!("done!");
             let container_bytes: usize = container.messages.iter().map(|m| m.data.len()).sum();
             self.bytes_since_space_check += container_bytes;
-            let max_type = match analysis_writer.analyze(container).await {
-                Ok(t) => t,
+            let summary = match analysis_writer.analyze(container).await {
+                Ok(s) => s,
                 Err(e) => {
                     warn!("failed to analyze container: {e}");
-                    EventType::Informational
+                    AnalysisSummary {
+                        max_type: EventType::Informational,
+                        event_counts: [0; 4],
+                        last_event: None,
+                        cell_info: CellInfo::default(),
+                    }
                 }
             };
+
+            for i in 0..4 {
+                self.event_counts[i] += summary.event_counts[i];
+            }
+            if let Some(ref le) = summary.last_event {
+                self.last_event_name = Some(le.analyzer_name.clone());
+                self.last_event_time = le.time.clone();
+                self.last_event_severity = Some(le.severity);
+            }
+            let max_type = summary.max_type;
 
             if max_type > EventType::Informational {
                 info!("a heuristic triggered on this run!");
@@ -361,6 +452,34 @@ impl DiagTask {
                         .expect("couldn't send ui update message: {}");
                 }
             }
+
+            #[cfg(feature = "orbic-ui")]
+            {
+                if let Some(ref di) = self.device_info {
+                    let mut info = di.write().await;
+                    info.event_counts = self.event_counts;
+                    info.last_event_time = self.last_event_time.clone();
+                    info.last_event_name = self.last_event_name.clone();
+                    info.last_event_severity = self.last_event_severity;
+                    if summary.cell_info.mcc_mnc.is_some() {
+                        info.mcc_mnc = summary.cell_info.mcc_mnc.clone();
+                    }
+                    if summary.cell_info.rsrp_dbm.is_some() {
+                        info.rsrp_dbm = summary.cell_info.rsrp_dbm;
+                    }
+                    if self.max_type_seen > EventType::Informational {
+                        info.display_state = display::DisplayState::WarningDetected {
+                            event_type: self.max_type_seen,
+                        };
+                    }
+                    if max_type >= EventType::Medium {
+                        info.wake_display = true;
+                    }
+                }
+                if let Some(ref n) = self.device_notify {
+                    n.notify_one();
+                }
+            }
         } else {
             debug!("no qmdl_writer set, continuing...");
         }
@@ -380,10 +499,23 @@ pub fn run_diag_read_thread(
     notification_channel: tokio::sync::mpsc::Sender<Notification>,
     min_space_to_start_mb: u64,
     min_space_to_continue_mb: u64,
+    #[cfg(feature = "orbic-ui")] device_info: Option<Arc<RwLock<display::DeviceInfo>>>,
+    #[cfg(feature = "orbic-ui")] device_notify: Option<Arc<tokio::sync::Notify>>,
 ) {
     task_tracker.spawn(async move {
         let mut diag_stream = pin!(dev.as_stream().into_stream());
-        let mut diag_task = DiagTask::new(ui_update_sender, analysis_sender, analyzer_config, notification_channel, min_space_to_start_mb, min_space_to_continue_mb);
+        let mut diag_task = DiagTask::new(
+            ui_update_sender,
+            analysis_sender,
+            analyzer_config,
+            notification_channel,
+            min_space_to_start_mb,
+            min_space_to_continue_mb,
+            #[cfg(feature = "orbic-ui")]
+            device_info,
+            #[cfg(feature = "orbic-ui")]
+            device_notify,
+        );
         qmdl_file_tx
             .send(DiagDeviceCtrlMessage::StartRecording { response_tx: None })
             .await
@@ -434,6 +566,19 @@ pub fn run_diag_read_thread(
                         },
                         Err(err) => {
                             error!("error reading diag device: {err}");
+                            #[cfg(feature = "orbic-ui")]
+                            {
+                                let di = diag_task.device_info.clone();
+                                let notify = diag_task.device_notify.clone();
+                                if let Some(di) = di {
+                                    let mut info = di.write().await;
+                                    info.stopped_reason = Some(display::StoppedReason::DiagError);
+                                    info.display_state = display::DisplayState::Paused;
+                                }
+                                if let Some(n) = notify {
+                                    n.notify_one();
+                                }
+                            }
                             return Err(err);
                         }
                     }

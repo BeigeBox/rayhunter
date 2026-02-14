@@ -5,6 +5,9 @@ build-daemon-firmware = "build -p rayhunter-daemon --bin rayhunter-daemon --targ
 # Build the daemon with "firmware-devel" profile and "rustcrypto" backend.
 # Works with just the Rust toolchain, and is medium-slow to build. Binaries are slightly larger.
 build-daemon-firmware-devel = "build -p rayhunter-daemon --bin rayhunter-daemon --target armv7-unknown-linux-musleabihf --profile firmware-devel"
+# Orbic-specific builds with embedded-graphics UI
+build-daemon-firmware-orbic = "build -p rayhunter-daemon --bin rayhunter-daemon --target armv7-unknown-linux-musleabihf --profile firmware --no-default-features --features ring-tls,orbic-ui"
+build-daemon-firmware-devel-orbic = "build -p rayhunter-daemon --bin rayhunter-daemon --target armv7-unknown-linux-musleabihf --profile firmware-devel --features orbic-ui"
 # Build rootshell for firmware
 build-rootshell-firmware = "build -p rootshell --bin rootshell --target armv7-unknown-linux-musleabihf --profile firmware"
 # Build rootshell for development

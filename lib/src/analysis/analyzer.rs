@@ -11,9 +11,12 @@ use crate::{diag::MessagesContainer, gsmtap_parser};
 
 use super::{
     connection_redirect_downgrade::ConnectionRedirect2GDowngradeAnalyzer,
-    imsi_requested::ImsiRequestedAnalyzer, incomplete_sib::IncompleteSibAnalyzer,
-    information_element::InformationElement, nas_null_cipher::NasNullCipherAnalyzer,
-    null_cipher::NullCipherAnalyzer, priority_2g_downgrade::LteSib6And7DowngradeAnalyzer,
+    imsi_requested::ImsiRequestedAnalyzer,
+    incomplete_sib::IncompleteSibAnalyzer,
+    information_element::{InformationElement, LteInformationElement},
+    nas_null_cipher::NasNullCipherAnalyzer,
+    null_cipher::NullCipherAnalyzer,
+    priority_2g_downgrade::LteSib6And7DowngradeAnalyzer,
     test_analyzer::TestAnalyzer,
 };
 
@@ -107,6 +110,12 @@ impl<'de> Deserialize<'de> for EventType {
 pub struct Event {
     pub event_type: EventType,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CellInfo {
+    pub mcc_mnc: Option<String>,
+    pub rsrp_dbm: Option<i16>,
 }
 
 /// An [Analyzer] represents one type of heuristic for detecting an IMSI Catcher
@@ -302,6 +311,49 @@ impl<'de> Deserialize<'de> for AnalysisRow {
     }
 }
 
+fn extract_cell_info(ie: &InformationElement, cell_info: &mut CellInfo) {
+    use telcom_parser::lte_rrc::*;
+    if let InformationElement::LTE(lte_ie) = ie {
+        match &**lte_ie {
+            LteInformationElement::BcchDlSch(sch_msg) => {
+                if let BCCH_DL_SCH_MessageType::C1(
+                    BCCH_DL_SCH_MessageType_c1::SystemInformationBlockType1(sib1),
+                ) = &sch_msg.message
+                {
+                    let plmn = &sib1.cell_access_related_info.plmn_identity_list.0;
+                    if let Some(first) = plmn.first() {
+                        let mcc = first
+                            .plmn_identity
+                            .mcc
+                            .as_ref()
+                            .map(|m| format!("{}{}{}", m.0[0].0, m.0[1].0, m.0[2].0))
+                            .unwrap_or_default();
+                        let mnc = &first.plmn_identity.mnc;
+                        let mnc_str = if mnc.0.len() == 3 {
+                            format!("{}{}{}", mnc.0[0].0, mnc.0[1].0, mnc.0[2].0)
+                        } else {
+                            format!("{}{}", mnc.0[0].0, mnc.0[1].0)
+                        };
+                        cell_info.mcc_mnc = Some(format!("{mcc}/{mnc_str}"));
+                    }
+                }
+            }
+            LteInformationElement::UlDcch(ul_dcch) => {
+                if let UL_DCCH_MessageType::C1(UL_DCCH_MessageType_c1::MeasurementReport(mr)) =
+                    &ul_dcch.message
+                    && let MeasurementReportCriticalExtensions::C1(
+                        MeasurementReportCriticalExtensions_c1::MeasurementReport_r8(r8),
+                    ) = &mr.critical_extensions
+                {
+                    let raw = r8.meas_results.meas_result_p_cell.rsrp_result.0;
+                    cell_info.rsrp_dbm = Some(raw as i16 - 141);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub struct Harness {
     analyzers: Vec<Box<dyn Analyzer + Send>>,
     packet_num: usize,
@@ -400,8 +452,12 @@ impl Harness {
         row
     }
 
-    pub fn analyze_qmdl_messages(&mut self, container: MessagesContainer) -> Vec<AnalysisRow> {
+    pub fn analyze_qmdl_messages(
+        &mut self,
+        container: MessagesContainer,
+    ) -> (Vec<AnalysisRow>, CellInfo) {
         let mut rows = Vec::new();
+        let mut cell_info = CellInfo::default();
         for maybe_qmdl_message in container.into_messages() {
             self.packet_num += 1;
 
@@ -441,9 +497,10 @@ impl Harness {
                 }
             };
 
+            extract_cell_info(&element, &mut cell_info);
             row.events = self.analyze_information_element(&element);
         }
-        rows
+        (rows, cell_info)
     }
 
     fn analyze_information_element(&mut self, ie: &InformationElement) -> Vec<Option<Event>> {

@@ -8,6 +8,7 @@ rust-version = "1.88.0"
 default = ["rustcrypto-tls"]
 rustcrypto-tls = ["reqwest/rustls-tls-webpki-roots-no-provider", "dep:rustls-rustcrypto"]
 ring-tls = ["reqwest/rustls-tls-webpki-roots"]
+orbic-ui = ["dep:embedded-graphics"]
 
 [dependencies]
 rayhunter = { path = "../lib" }
@@ -32,3 +33,4 @@ anyhow = "1.0.98"
 reqwest = { version = "0.12.20", default-features = false }
 rustls-rustcrypto = { version = "0.0.2-alpha", optional = true }
 async-trait = "0.1.88"
+embedded-graphics = { version = "0.8", optional = true }

@@ -28,7 +28,6 @@ pub fn run_key_input_thread(
     }
 
     task_tracker.spawn(async move {
-        // Open the input device
         let mut file = match File::open("/dev/input/event0").await {
             Ok(file) => file,
             Err(e) => {
@@ -38,63 +37,90 @@ pub fn run_key_input_thread(
         };
 
         let mut buffer = [0u8; INPUT_EVENT_SIZE];
-        let mut last_keyup: Option<Instant> = None;
+        let mut pending_keyup: Option<Instant> = None;
         let mut last_event_time: Option<Instant> = None;
 
         loop {
-            tokio::select! {
-               _ = cancellation_token.cancelled() => {
-                    info!("received key input shutdown");
-                    return;
+            let timeout = match pending_keyup {
+                Some(t) => {
+                    let deadline = t + Duration::from_millis(800);
+                    let now = Instant::now();
+                    if now >= deadline {
+                        Duration::ZERO
+                    } else {
+                        deadline - now
+                    }
                 }
+                None => Duration::from_secs(86400),
+            };
+
+            enum Action {
+                Input,
+                Timeout,
+                Shutdown,
+            }
+
+            let action = tokio::select! {
+                _ = cancellation_token.cancelled() => Action::Shutdown,
                 result = file.read_exact(&mut buffer) => {
                     if let Err(e) = result {
                         error!("failed to read key input: {e}");
                         return;
                     }
+                    Action::Input
                 }
-            }
+                _ = tokio::time::sleep(timeout) => Action::Timeout,
+            };
 
-            let event = parse_event(buffer);
+            match action {
+                Action::Shutdown => {
+                    info!("received key input shutdown");
+                    return;
+                }
+                Action::Timeout => {
+                    pending_keyup = None;
+                }
+                Action::Input => {
+                    let event = parse_event(buffer);
+                    let now = Instant::now();
 
-            let now = Instant::now();
-
-            // On orbic it was observed that pressing the power button can trigger many successive
-            // events. Drop events that are too close together.
-            if let Some(last_time) = last_event_time
-                && now.duration_since(last_time) < Duration::from_millis(50)
-            {
-                last_event_time = Some(now);
-                continue;
-            }
-            last_event_time = Some(now);
-
-            match event {
-                Event::KeyUp => {
-                    if let Some(last_keyup_instant) = last_keyup {
-                        let elapsed = now.duration_since(last_keyup_instant);
-
-                        if elapsed >= Duration::from_millis(100)
-                            && elapsed <= Duration::from_millis(800)
-                        {
-                            if let Err(e) = diag_tx.send(DiagDeviceCtrlMessage::StopRecording).await
-                            {
-                                error!("Failed to send StopRecording: {e}");
-                            }
-                            if let Err(e) = diag_tx
-                                .send(DiagDeviceCtrlMessage::StartRecording { response_tx: None })
-                                .await
-                            {
-                                error!("Failed to send StartRecording: {e}");
-                            }
-                            last_keyup = None;
-                            continue;
-                        }
+                    if let Some(last_time) = last_event_time
+                        && now.duration_since(last_time) < Duration::from_millis(50)
+                    {
+                        last_event_time = Some(now);
+                        continue;
                     }
+                    last_event_time = Some(now);
 
-                    last_keyup = Some(now);
+                    match event {
+                        Event::KeyUp => {
+                            if let Some(first) = pending_keyup {
+                                let elapsed = now.duration_since(first);
+                                if elapsed >= Duration::from_millis(100)
+                                    && elapsed <= Duration::from_millis(800)
+                                {
+                                    if let Err(e) =
+                                        diag_tx.send(DiagDeviceCtrlMessage::StopRecording).await
+                                    {
+                                        error!("Failed to send StopRecording: {e}");
+                                    }
+                                    if let Err(e) = diag_tx
+                                        .send(DiagDeviceCtrlMessage::StartRecording {
+                                            response_tx: None,
+                                        })
+                                        .await
+                                    {
+                                        error!("Failed to send StartRecording: {e}");
+                                    }
+                                    pending_keyup = None;
+                                    continue;
+                                }
+                            }
+                            pending_keyup = Some(now);
+                        }
+                        Event::KeyDown => {}
+                    }
                 }
-                Event::KeyDown => {}
             }
         }
     });

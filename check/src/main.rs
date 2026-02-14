@@ -130,7 +130,8 @@ async fn analyze_qmdl(qmdl_path: &str, show_skipped: bool) {
         .await
         .expect("failed getting QMDL container")
     {
-        for row in harness.analyze_qmdl_messages(container) {
+        let (rows, _cell_info) = harness.analyze_qmdl_messages(container);
+        for row in rows {
             report.process_row(row);
         }
     }

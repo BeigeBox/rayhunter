@@ -227,10 +227,14 @@ async fn setup_rayhunter(admin_ip: &str, reset_config: bool) -> Result<()> {
     )
     .await?;
 
+    let rayhunter_daemon_init = RAYHUNTER_DAEMON_INIT.replace(
+        "#RAYHUNTER-PRESTART",
+        "pkill -f start_qt_daemon 2>/dev/null || true; sleep 1; pkill -f qt_daemon 2>/dev/null || true\n    sh /data/rayhunter/scripts/wifi-client.sh start 2>/dev/null &",
+    );
     telnet_send_file(
         addr,
         "/etc/init.d/rayhunter_daemon",
-        RAYHUNTER_DAEMON_INIT.as_bytes(),
+        rayhunter_daemon_init.as_bytes(),
         false,
     )
     .await?;

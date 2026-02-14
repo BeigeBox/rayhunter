@@ -167,10 +167,14 @@ async fn setup_rayhunter(mut adb_device: ADBUSBDevice, reset_config: bool) -> Re
         .await?;
     }
 
+    let rayhunter_daemon_init = RAYHUNTER_DAEMON_INIT.replace(
+        "#RAYHUNTER-PRESTART",
+        "pkill -f start_qt_daemon 2>/dev/null || true; sleep 1; pkill -f qt_daemon 2>/dev/null || true\n    sh /data/rayhunter/scripts/wifi-client.sh start 2>/dev/null &",
+    );
     install_file(
         &mut adb_device,
         "/etc/init.d/rayhunter_daemon",
-        RAYHUNTER_DAEMON_INIT.as_bytes(),
+        rayhunter_daemon_init.as_bytes(),
     )
     .await?;
     install_file(
