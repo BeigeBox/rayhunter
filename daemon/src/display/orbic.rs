@@ -29,7 +29,6 @@ async fn write_fb_rgb565(rgb888: &[u8]) {
 
 #[cfg(feature = "orbic-ui")]
 mod ui {
-    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use embedded_graphics::Pixel;
@@ -44,11 +43,10 @@ mod ui {
     use log::{info, warn};
     use tokio::fs::File;
     use tokio::io::AsyncReadExt;
-    use tokio::sync::{Notify, RwLock};
     use tokio_util::sync::CancellationToken;
     use tokio_util::task::TaskTracker;
 
-    use crate::display::{DeviceInfo, DisplayState, StoppedReason};
+    use crate::display::{DeviceInfo, DeviceInfoHandle, DisplayState, StoppedReason};
     use rayhunter::analysis::analyzer::EventType;
 
     const WIDTH: usize = 128;
@@ -183,13 +181,13 @@ mod ui {
         }
     }
 
-    fn pill_bg_for_block(block: Rgb888) -> Rgb888 {
-        match (block.r(), block.g(), block.b()) {
-            (0x00, 0xC8, 0x53) => Rgb888::new(0x00, 0x6E, 0x2E),
-            (0xFF, 0xD6, 0x00) => Rgb888::new(0x8C, 0x76, 0x00),
-            (0xFF, 0x6D, 0x00) => Rgb888::new(0x8C, 0x3C, 0x00),
-            (0xD5, 0x00, 0x00) => Rgb888::new(0x75, 0x00, 0x00),
-            (0x00, 0x91, 0xEA) => Rgb888::new(0x00, 0x50, 0x81),
+    fn pill_bg_for_block(color: Rgb888) -> Rgb888 {
+        match color {
+            GREEN => Rgb888::new(0x00, 0x6E, 0x2E),
+            YELLOW => Rgb888::new(0x8C, 0x76, 0x00),
+            ORANGE => Rgb888::new(0x8C, 0x3C, 0x00),
+            RED => Rgb888::new(0x75, 0x00, 0x00),
+            BLUE => Rgb888::new(0x00, 0x50, 0x81),
             _ => Rgb888::new(0x40, 0x40, 0x40),
         }
     }
@@ -226,8 +224,7 @@ mod ui {
 
     async fn boot_animation(
         fb: &mut EgFramebuffer,
-        device_info: &Arc<RwLock<DeviceInfo>>,
-        notify: &Arc<Notify>,
+        handle: &DeviceInfoHandle,
         shutdown_token: &CancellationToken,
     ) {
         let dot_style = MonoTextStyle::new(&FONT_6X10, SEPARATOR);
@@ -269,14 +266,14 @@ mod ui {
 
         loop {
             {
-                let info = device_info.read().await;
+                let info = handle.read().await;
                 if matches!(info.display_state, DisplayState::Recording) {
                     break;
                 }
             }
             tokio::select! {
                 _ = shutdown_token.cancelled() => return,
-                _ = notify.notified() => {},
+                _ = handle.notify_ref().notified() => {},
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {},
             }
         }
@@ -325,9 +322,7 @@ mod ui {
 
         draw_separator(fb, 80);
 
-        let disk_color = if info.stopped_reason.is_some()
-            && matches!(info.stopped_reason, Some(StoppedReason::DiskFull))
-        {
+        let disk_color = if matches!(info.stopped_reason, Some(StoppedReason::DiskFull)) {
             RED
         } else if info.low_disk {
             AMBER
@@ -600,8 +595,7 @@ mod ui {
 
     pub fn update_ui(
         task_tracker: &TaskTracker,
-        device_info: Arc<RwLock<DeviceInfo>>,
-        notify: Arc<Notify>,
+        handle: DeviceInfoHandle,
         shutdown_token: CancellationToken,
     ) {
         info!("enabling Orbic backlight via {}", super::BL_GPIO_PATH);
@@ -612,7 +606,7 @@ mod ui {
             let mut wps = InputButton::open("/dev/input/event1").await;
             let mut pwr = InputButton::open("/dev/input/event0").await;
 
-            boot_animation(&mut fb, &device_info, &notify, &shutdown_token).await;
+            boot_animation(&mut fb, &handle, &shutdown_token).await;
 
             let mut screen = Screen::Status;
             let mut backlight_on = true;
@@ -625,7 +619,7 @@ mod ui {
                 }
 
                 {
-                    let info = device_info.read().await;
+                    let info = handle.read().await;
                     match screen {
                         Screen::Status => render_status(&mut fb, &info),
                         Screen::Network => render_network(&mut fb, &info),
@@ -645,8 +639,8 @@ mod ui {
 
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
-                    _ = notify.notified() => {
-                        let mut info = device_info.write().await;
+                    _ = handle.notify_ref().notified() => {
+                        let mut info = handle.write().await;
                         if info.wake_display {
                             info.wake_display = false;
                             drop(info);
@@ -658,16 +652,10 @@ mod ui {
                             last_activity = Instant::now();
                         }
                     },
-                    _ = wps.next_press() => {
-                        if backlight_on {
-                            screen = screen.next();
-                        } else {
-                            super::set_backlight(true);
-                            backlight_on = true;
-                        }
-                        last_activity = Instant::now();
-                    },
-                    _ = pwr.next_press() => {
+                    _ = async { tokio::select! {
+                        _ = wps.next_press() => {},
+                        _ = pwr.next_press() => {},
+                    }} => {
                         if backlight_on {
                             screen = screen.next();
                         } else {

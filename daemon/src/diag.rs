@@ -64,9 +64,7 @@ pub struct DiagTask {
     last_event_time: Option<String>,
     last_event_severity: Option<EventType>,
     #[cfg(feature = "orbic-ui")]
-    device_info: Option<Arc<RwLock<display::DeviceInfo>>>,
-    #[cfg(feature = "orbic-ui")]
-    device_notify: Option<Arc<tokio::sync::Notify>>,
+    device_handle: Option<display::DeviceInfoHandle>,
 }
 
 enum DiagState {
@@ -112,8 +110,7 @@ impl DiagTask {
         notification_channel: tokio::sync::mpsc::Sender<Notification>,
         min_space_to_start_mb: u64,
         min_space_to_continue_mb: u64,
-        #[cfg(feature = "orbic-ui")] device_info: Option<Arc<RwLock<display::DeviceInfo>>>,
-        #[cfg(feature = "orbic-ui")] device_notify: Option<Arc<tokio::sync::Notify>>,
+        #[cfg(feature = "orbic-ui")] device_handle: Option<display::DeviceInfoHandle>,
     ) -> Self {
         Self {
             ui_update_sender,
@@ -131,19 +128,7 @@ impl DiagTask {
             last_event_time: None,
             last_event_severity: None,
             #[cfg(feature = "orbic-ui")]
-            device_info,
-            #[cfg(feature = "orbic-ui")]
-            device_notify,
-        }
-    }
-
-    #[cfg(feature = "orbic-ui")]
-    async fn update_device_info_state(&mut self, state: display::DisplayState) {
-        if let Some(ref di) = self.device_info {
-            di.write().await.display_state = state;
-        }
-        if let Some(ref n) = self.device_notify {
-            n.notify_one();
+            device_handle,
         }
     }
 
@@ -207,20 +192,18 @@ impl DiagTask {
             warn!("couldn't send ui update message: {e}");
         }
         #[cfg(feature = "orbic-ui")]
-        if let Some(ref di) = self.device_info {
-            let mut info = di.write().await;
-            info.display_state = display::DisplayState::Recording;
-            info.event_counts = [0; 4];
-            info.last_event_time = None;
-            info.last_event_name = None;
-            info.last_event_severity = None;
-            info.low_disk = false;
-            info.stopped_reason = None;
-            info.wake_display = false;
-        }
-        #[cfg(feature = "orbic-ui")]
-        if let Some(ref n) = self.device_notify {
-            n.notify_one();
+        if let Some(ref h) = self.device_handle {
+            h.update(|info| {
+                info.display_state = display::DisplayState::Recording;
+                info.event_counts = [0; 4];
+                info.last_event_time = None;
+                info.last_event_name = None;
+                info.last_event_severity = None;
+                info.low_disk = false;
+                info.stopped_reason = None;
+                info.wake_display = false;
+            })
+            .await;
         }
         Ok(())
     }
@@ -254,8 +237,10 @@ impl DiagTask {
             warn!("couldn't send ui update message: {e}");
         }
         #[cfg(feature = "orbic-ui")]
-        self.update_device_info_state(display::DisplayState::Paused)
-            .await;
+        if let Some(ref h) = self.device_handle {
+            h.update(|info| info.display_state = display::DisplayState::Paused)
+                .await;
+        }
     }
 
     async fn delete_entry(
@@ -337,10 +322,12 @@ impl DiagTask {
                             .ok();
 
                         #[cfg(feature = "orbic-ui")]
-                        if let Some(ref di) = self.device_info {
-                            let mut info = di.write().await;
-                            info.stopped_reason = Some(display::StoppedReason::DiskFull);
-                            info.low_disk = true;
+                        if let Some(ref h) = self.device_handle {
+                            h.update(|info| {
+                                info.stopped_reason = Some(display::StoppedReason::DiskFull);
+                                info.low_disk = true;
+                            })
+                            .await;
                         }
 
                         self.stop(qmdl_store, Some(reason)).await;
@@ -348,8 +335,8 @@ impl DiagTask {
                     }
                     DiskSpaceCheck::Warning(mb) => {
                         #[cfg(feature = "orbic-ui")]
-                        if let Some(ref di) = self.device_info {
-                            di.write().await.low_disk = true;
+                        if let Some(ref h) = self.device_handle {
+                            h.update(|info| info.low_disk = true).await;
                         }
                         if !self.low_space_warned {
                             self.low_space_warned = true;
@@ -367,8 +354,8 @@ impl DiagTask {
                     DiskSpaceCheck::Ok(_) =>
                     {
                         #[cfg(feature = "orbic-ui")]
-                        if let Some(ref di) = self.device_info {
-                            di.write().await.low_disk = false;
+                        if let Some(ref h) = self.device_handle {
+                            h.update(|info| info.low_disk = false).await;
                         }
                     }
                     DiskSpaceCheck::Failed => {}
@@ -379,8 +366,11 @@ impl DiagTask {
                 let reason = format!("failed to write to QMDL (disk full?): {e}");
                 error!("{reason}");
                 #[cfg(feature = "orbic-ui")]
-                if let Some(ref di) = self.device_info {
-                    di.write().await.stopped_reason = Some(display::StoppedReason::DiskFull);
+                if let Some(ref h) = self.device_handle {
+                    h.update(|info| {
+                        info.stopped_reason = Some(display::StoppedReason::DiskFull);
+                    })
+                    .await;
                 }
                 self.stop(qmdl_store, Some(reason)).await;
                 return;
@@ -399,8 +389,11 @@ impl DiagTask {
                 let reason = format!("failed to update manifest (disk full?): {e}");
                 error!("{reason}");
                 #[cfg(feature = "orbic-ui")]
-                if let Some(ref di) = self.device_info {
-                    di.write().await.stopped_reason = Some(display::StoppedReason::DiskFull);
+                if let Some(ref h) = self.device_handle {
+                    h.update(|info| {
+                        info.stopped_reason = Some(display::StoppedReason::DiskFull);
+                    })
+                    .await;
                 }
                 self.stop(qmdl_store, Some(reason)).await;
                 return;
@@ -456,9 +449,8 @@ impl DiagTask {
             }
 
             #[cfg(feature = "orbic-ui")]
-            {
-                if let Some(ref di) = self.device_info {
-                    let mut info = di.write().await;
+            if let Some(ref h) = self.device_handle {
+                h.update(|info| {
                     info.event_counts = self.event_counts;
                     info.last_event_time = self.last_event_time.clone();
                     info.last_event_name = self.last_event_name.clone();
@@ -477,10 +469,8 @@ impl DiagTask {
                     if max_type >= EventType::Medium {
                         info.wake_display = true;
                     }
-                }
-                if let Some(ref n) = self.device_notify {
-                    n.notify_one();
-                }
+                })
+                .await;
             }
         } else {
             debug!("no qmdl_writer set, continuing...");
@@ -501,8 +491,7 @@ pub fn run_diag_read_thread(
     notification_channel: tokio::sync::mpsc::Sender<Notification>,
     min_space_to_start_mb: u64,
     min_space_to_continue_mb: u64,
-    #[cfg(feature = "orbic-ui")] device_info: Option<Arc<RwLock<display::DeviceInfo>>>,
-    #[cfg(feature = "orbic-ui")] device_notify: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(feature = "orbic-ui")] device_handle: Option<display::DeviceInfoHandle>,
 ) {
     task_tracker.spawn(async move {
         let mut diag_stream = pin!(dev.as_stream().into_stream());
@@ -514,9 +503,7 @@ pub fn run_diag_read_thread(
             min_space_to_start_mb,
             min_space_to_continue_mb,
             #[cfg(feature = "orbic-ui")]
-            device_info,
-            #[cfg(feature = "orbic-ui")]
-            device_notify,
+            device_handle,
         );
         qmdl_file_tx
             .send(DiagDeviceCtrlMessage::StartRecording { response_tx: None })
@@ -569,17 +556,12 @@ pub fn run_diag_read_thread(
                         Err(err) => {
                             error!("error reading diag device: {err}");
                             #[cfg(feature = "orbic-ui")]
-                            {
-                                let di = diag_task.device_info.clone();
-                                let notify = diag_task.device_notify.clone();
-                                if let Some(di) = di {
-                                    let mut info = di.write().await;
+                            if let Some(ref h) = diag_task.device_handle {
+                                h.update(|info| {
                                     info.stopped_reason = Some(display::StoppedReason::DiagError);
                                     info.display_state = display::DisplayState::Paused;
-                                }
-                                if let Some(n) = notify {
-                                    n.notify_one();
-                                }
+                                })
+                                .await;
                             }
                             return Err(err);
                         }
