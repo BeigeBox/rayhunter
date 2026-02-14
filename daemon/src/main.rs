@@ -5,6 +5,8 @@ mod diag;
 mod display;
 mod error;
 mod key_input;
+#[cfg(feature = "orbic-ui")]
+mod network;
 mod notifications;
 mod pcap;
 mod qmdl_store;
@@ -214,6 +216,23 @@ async fn run_with_config(
 
     let notification_service = NotificationService::new(config.ntfy_url.clone());
 
+    #[cfg(feature = "orbic-ui")]
+    let device_info_notify: Option<(
+        Arc<RwLock<display::DeviceInfo>>,
+        Arc<tokio::sync::Notify>,
+    )> = if matches!(config.device, Device::Orbic) {
+        let mut di = display::DeviceInfo::new(config.colorblind_mode, config.port);
+        let (ap_ssid, ap_password) = network::read_ap_credentials().await;
+        di.ap_ssid = ap_ssid;
+        di.ap_password = ap_password;
+        di.wifi_ssid = network::read_wifi_ssid();
+        let di = Arc::new(RwLock::new(di));
+        let n = Arc::new(tokio::sync::Notify::new());
+        Some((di, n))
+    } else {
+        None
+    };
+
     if !config.debug_mode {
         info!("Using configuration for device: {0:?}", config.device);
         let mut dev = DiagDevice::new(&config.device)
@@ -236,18 +255,45 @@ async fn run_with_config(
             notification_service.new_handler(),
             config.min_space_to_start_recording_mb,
             config.min_space_to_continue_recording_mb,
+            #[cfg(feature = "orbic-ui")]
+            device_info_notify.as_ref().map(|(di, _)| di.clone()),
+            #[cfg(feature = "orbic-ui")]
+            device_info_notify.as_ref().map(|(_, n)| n.clone()),
         );
         info!("Starting UI");
 
-        let update_ui = match &config.device {
-            Device::Orbic => display::orbic::update_ui,
-            Device::Tplink => display::tplink::update_ui,
-            Device::Tmobile => display::tmobile::update_ui,
-            Device::Wingtech => display::wingtech::update_ui,
-            Device::Pinephone => display::headless::update_ui,
-            Device::Uz801 => display::uz801::update_ui,
-        };
-        update_ui(&task_tracker, &config, shutdown_token.clone(), ui_update_rx);
+        #[cfg(feature = "orbic-ui")]
+        if let Some((ref di, ref n)) = device_info_notify {
+            display::orbic::update_ui(
+                &task_tracker,
+                di.clone(),
+                n.clone(),
+                shutdown_token.clone(),
+            );
+        } else {
+            let update_ui = match &config.device {
+                Device::Tplink => display::tplink::update_ui,
+                Device::Tmobile => display::tmobile::update_ui,
+                Device::Wingtech => display::wingtech::update_ui,
+                Device::Pinephone => display::headless::update_ui,
+                Device::Uz801 => display::uz801::update_ui,
+                Device::Orbic => unreachable!(),
+            };
+            update_ui(&task_tracker, &config, shutdown_token.clone(), ui_update_rx);
+        }
+
+        #[cfg(not(feature = "orbic-ui"))]
+        {
+            let update_ui = match &config.device {
+                Device::Orbic => display::orbic::update_ui,
+                Device::Tplink => display::tplink::update_ui,
+                Device::Tmobile => display::tmobile::update_ui,
+                Device::Wingtech => display::wingtech::update_ui,
+                Device::Pinephone => display::headless::update_ui,
+                Device::Uz801 => display::uz801::update_ui,
+            };
+            update_ui(&task_tracker, &config, shutdown_token.clone(), ui_update_rx);
+        }
 
         info!("Starting Key Input service");
         key_input::run_key_input_thread(
@@ -280,6 +326,8 @@ async fn run_with_config(
         config.device.clone(),
         notification_service.new_handler(),
         shutdown_token.clone(),
+        #[cfg(feature = "orbic-ui")]
+        device_info_notify.clone(),
     );
 
     run_notification_worker(
@@ -287,6 +335,44 @@ async fn run_with_config(
         notification_service,
         config.enabled_notifications.clone(),
     );
+
+    #[cfg(feature = "orbic-ui")]
+    if let Some((ref di, ref n)) = device_info_notify {
+        let di = di.clone();
+        let n = n.clone();
+        let qmdl_path = config.qmdl_store_path.clone();
+        let st = shutdown_token.clone();
+        task_tracker.spawn(async move {
+            loop {
+                {
+                    let mut info = di.write().await;
+                    if let Ok(disk) = stats::DiskStats::new(&qmdl_path) {
+                        if let Some(avail) = disk.available_bytes {
+                            info.disk_available_mb = (avail / (1024 * 1024)) as u32;
+                        }
+                        if let Some(total) = disk.total_bytes {
+                            info.disk_total_mb = (total / (1024 * 1024)) as u32;
+                        }
+                    }
+                    if let Ok((total_kb, avail_kb)) = stats::read_memory_kb() {
+                        info.mem_total_mb = (total_kb / 1024) as u32;
+                        info.mem_free_mb = (avail_kb / 1024) as u32;
+                    }
+                    if let Ok(secs) = stats::read_uptime_secs() {
+                        info.uptime_secs = secs;
+                    }
+                    let (connected, ip) = network::poll_wifi_status().await;
+                    info.wifi_connected = connected;
+                    info.wifi_ip = ip;
+                }
+                n.notify_one();
+                tokio::select! {
+                    _ = st.cancelled() => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {},
+                }
+            }
+        });
+    }
 
     let state = Arc::new(ServerState {
         config_path: args.config_path.clone(),
