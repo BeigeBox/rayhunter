@@ -36,6 +36,17 @@ start() {
         exit 1
     fi
 
+    # Wait for the wireless interface to appear (created asynchronously by QCMAP/hostapd)
+    for i in $(seq 1 30); do
+        [ -d "/sys/class/net/$IFACE" ] && break
+        [ "$i" = "1" ] && echo "Waiting for $IFACE..."
+        sleep 1
+    done
+    if [ ! -d "/sys/class/net/$IFACE" ]; then
+        echo "$IFACE not found after 30s, giving up"
+        exit 1
+    fi
+
     stop 2>/dev/null
     sleep 1
 
