@@ -1,6 +1,11 @@
 use rayhunter::analysis::analyzer::EventType;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "orbic-ui")]
+use std::sync::Arc;
+#[cfg(feature = "orbic-ui")]
+use tokio::sync::{Notify, RwLock};
+
 mod generic_framebuffer;
 
 pub mod headless;
@@ -91,5 +96,40 @@ impl DeviceInfo {
             mcc_mnc: None,
             rsrp_dbm: None,
         }
+    }
+}
+
+#[cfg(feature = "orbic-ui")]
+#[derive(Clone)]
+pub struct DeviceInfoHandle {
+    inner: Arc<RwLock<DeviceInfo>>,
+    notify: Arc<Notify>,
+}
+
+#[cfg(feature = "orbic-ui")]
+impl DeviceInfoHandle {
+    pub fn new(info: DeviceInfo) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(info)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Update DeviceInfo and wake the display loop.
+    pub async fn update(&self, f: impl FnOnce(&mut DeviceInfo)) {
+        f(&mut *self.inner.write().await);
+        self.notify.notify_one();
+    }
+
+    pub async fn read(&self) -> tokio::sync::RwLockReadGuard<'_, DeviceInfo> {
+        self.inner.read().await
+    }
+
+    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, DeviceInfo> {
+        self.inner.write().await
+    }
+
+    pub fn notify_ref(&self) -> &Notify {
+        &self.notify
     }
 }

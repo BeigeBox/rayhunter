@@ -12,11 +12,7 @@ use crate::{
 };
 
 #[cfg(feature = "orbic-ui")]
-use crate::display::DeviceInfo;
-#[cfg(feature = "orbic-ui")]
-use std::sync::Arc;
-#[cfg(feature = "orbic-ui")]
-use tokio::sync::{Notify, RwLock};
+use crate::display::DeviceInfoHandle;
 
 pub mod orbic;
 pub mod tmobile;
@@ -68,7 +64,7 @@ pub fn run_battery_notification_worker(
     device: Device,
     notification_channel: tokio::sync::mpsc::Sender<Notification>,
     shutdown_token: CancellationToken,
-    #[cfg(feature = "orbic-ui")] device_info: Option<(Arc<RwLock<DeviceInfo>>, Arc<Notify>)>,
+    #[cfg(feature = "orbic-ui")] device_handle: Option<DeviceInfoHandle>,
 ) {
     task_tracker.spawn(async move {
         // Don't send a notification initially if the device starts at a low battery level.
@@ -103,12 +99,11 @@ pub fn run_battery_notification_worker(
             };
 
             #[cfg(feature = "orbic-ui")]
-            if let Some((ref info_lock, ref notify)) = device_info {
-                let mut info = info_lock.write().await;
-                info.battery_level = Some(status.level);
-                info.battery_plugged = status.is_plugged_in;
-                drop(info);
-                notify.notify_one();
+            if let Some(ref h) = device_handle {
+                h.update(|info| {
+                    info.battery_level = Some(status.level);
+                    info.battery_plugged = status.is_plugged_in;
+                }).await;
             }
 
             // To avoid flapping, if the notification has already been triggered
