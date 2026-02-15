@@ -26,6 +26,7 @@ pub struct Config {
     pub min_space_to_continue_recording_mb: u64,
     pub wifi_ssid: Option<String>,
     pub wifi_password: Option<String>,
+    pub meshtastic_serial_port: Option<String>,
 }
 
 impl Default for Config {
@@ -45,6 +46,7 @@ impl Default for Config {
             min_space_to_continue_recording_mb: 1,
             wifi_ssid: None,
             wifi_password: None,
+            meshtastic_serial_port: None,
         }
     }
 }

@@ -37,6 +37,7 @@ pub struct ServerState {
     pub analysis_sender: Sender<AnalysisCtrlMessage>,
     pub daemon_restart_token: CancellationToken,
     pub ui_update_sender: Option<Sender<DisplayState>>,
+    pub meshtastic_sender: Option<Sender<crate::notifications::Notification>>,
 }
 
 pub async fn get_qmdl(
@@ -193,35 +194,43 @@ async fn update_wifi_creds(config: &Config) {
 pub async fn test_notification(
     State(state): State<Arc<ServerState>>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    let url = state.config.ntfy_url.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No notification URL configured".to_string(),
-    ))?;
+    let message = "Test notification from Rayhunter".to_string();
+    let mut results = Vec::new();
 
-    if url.is_empty() {
+    let has_ntfy = state
+        .config
+        .ntfy_url
+        .as_ref()
+        .is_some_and(|u| !u.is_empty());
+    if has_ntfy {
+        let url = state.config.ntfy_url.as_ref().unwrap();
+        let http_client = reqwest::Client::new();
+        match crate::notifications::send_notification(&http_client, url, message.clone()).await {
+            Ok(()) => results.push("ntfy: sent".to_string()),
+            Err(e) => results.push(format!("ntfy: failed ({e})")),
+        }
+    }
+
+    if let Some(ref mesh_tx) = state.meshtastic_sender {
+        let notif = crate::notifications::Notification::new(
+            crate::notifications::NotificationType::Warning,
+            message,
+            None,
+        );
+        match mesh_tx.send(notif).await {
+            Ok(()) => results.push("meshtastic: sent".to_string()),
+            Err(e) => results.push(format!("meshtastic: failed ({e})")),
+        }
+    }
+
+    if results.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Notification URL is empty".to_string(),
+            "No notification channels configured".to_string(),
         ));
     }
 
-    let http_client = reqwest::Client::new();
-    let message = "Test notification from Rayhunter".to_string();
-
-    crate::notifications::send_notification(&http_client, url, message)
-        .await
-        .map(|()| {
-            (
-                StatusCode::OK,
-                "Test notification sent successfully".to_string(),
-            )
-        })
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to send test notification: {e}"),
-            )
-        })
+    Ok((StatusCode::OK, results.join(", ")))
 }
 
 /// Response for GET /api/time
@@ -440,6 +449,7 @@ mod tests {
             analysis_sender: analysis_tx,
             daemon_restart_token: CancellationToken::new(),
             ui_update_sender: None,
+            meshtastic_sender: None,
         })
     }
 

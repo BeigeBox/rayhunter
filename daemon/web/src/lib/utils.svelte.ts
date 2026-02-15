@@ -29,6 +29,7 @@ export interface Config {
     min_space_to_continue_recording_mb: number;
     wifi_ssid: string | null;
     wifi_password: string | null;
+    meshtastic_serial_port: string | null;
 }
 
 export async function req(method: string, url: string, json_body?: unknown): Promise<string> {
@@ -95,15 +96,16 @@ export async function set_config(config: Config): Promise<void> {
     }
 }
 
-export async function test_notification(): Promise<void> {
+export async function test_notification(): Promise<string> {
     const response = await fetch('/api/test-notification', {
         method: 'POST',
     });
 
+    const body = await response.text();
     if (!response.ok) {
-        const error = await response.text();
-        throw new Error(error);
+        throw new Error(body);
     }
+    return body;
 }
 
 export interface TimeResponse {

@@ -5,6 +5,7 @@ mod diag;
 mod display;
 mod error;
 mod key_input;
+mod meshtastic;
 mod notifications;
 mod pcap;
 mod qmdl_store;
@@ -18,6 +19,7 @@ use crate::battery::run_battery_notification_worker;
 use crate::config::{parse_args, parse_config};
 use crate::diag::run_diag_read_thread;
 use crate::error::RayhunterError;
+use crate::meshtastic::{MeshtasticService, run_meshtastic_worker};
 use crate::notifications::{NotificationService, run_notification_worker};
 use crate::pcap::get_pcap;
 use crate::qmdl_store::RecordingStore;
@@ -214,6 +216,12 @@ async fn run_with_config(
 
     let notification_service = NotificationService::new(config.ntfy_url.clone());
 
+    let meshtastic_service = config
+        .meshtastic_serial_port
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .map(|port| MeshtasticService::new(port.clone()));
+
     if !config.debug_mode {
         info!("Using configuration for device: {0:?}", config.device);
         let mut dev = DiagDevice::new(&config.device)
@@ -234,6 +242,7 @@ async fn run_with_config(
             analysis_tx.clone(),
             config.analyzers.clone(),
             notification_service.new_handler(),
+            meshtastic_service.as_ref().map(|s| s.new_handler()),
             config.min_space_to_start_recording_mb,
             config.min_space_to_continue_recording_mb,
         );
@@ -288,6 +297,15 @@ async fn run_with_config(
         config.enabled_notifications.clone(),
     );
 
+    let meshtastic_tx = meshtastic_service.as_ref().map(|s| s.new_handler());
+    if let Some(mesh_service) = meshtastic_service {
+        run_meshtastic_worker(
+            &task_tracker,
+            mesh_service,
+            config.enabled_notifications.clone(),
+        );
+    }
+
     let state = Arc::new(ServerState {
         config_path: args.config_path.clone(),
         config,
@@ -297,6 +315,7 @@ async fn run_with_config(
         analysis_sender: analysis_tx,
         daemon_restart_token: restart_token.clone(),
         ui_update_sender: Some(ui_update_tx),
+        meshtastic_sender: meshtastic_tx,
     });
     run_server(&task_tracker, state, shutdown_token.clone()).await;
 
