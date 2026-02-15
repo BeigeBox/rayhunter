@@ -6,28 +6,34 @@ use std::env;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-#[cfg(target_arch = "arm")]
-use nix::unistd::Gid;
-
 fn main() {
     let mut args = env::args();
+
+    // discard argv[0]
+    let _ = args.next();
+
+    let mut cmd = Command::new("/bin/bash");
+    cmd.args(args).uid(0).gid(0);
 
     // Android's "paranoid network" feature restricts network access to
     // processes in specific groups. More info here:
     // https://www.elinux.org/Android_Security#Paranoid_network-ing
+    //
+    // Set supplementary groups in pre_exec because Rust's Command internally
+    // calls setgroups(0, NULL) when .gid() is used, which would clear any
+    // groups set before exec.
     #[cfg(target_arch = "arm")]
-    {
-        let gids = &[
-            Gid::from_raw(3003), // AID_INET
-            Gid::from_raw(3004), // AID_NET_RAW
-        ];
-        nix::unistd::setgroups(gids).expect("setgroups failed");
+    unsafe {
+        cmd.pre_exec(|| {
+            let gids: [libc::gid_t; 2] = [3003, 3004]; // AID_INET, AID_NET_RAW
+            if libc::setgroups(2, gids.as_ptr()) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
 
-    // discard argv[0]
-    let _ = args.next();
-    // This call will only return if there is an error
-    let error = Command::new("/bin/bash").args(args).uid(0).gid(0).exec();
+    let error = cmd.exec();
     eprintln!("Error running command: {error}");
     std::process::exit(1);
 }
