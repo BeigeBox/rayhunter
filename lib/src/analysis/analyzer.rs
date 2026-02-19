@@ -11,6 +11,7 @@ use crate::{diag::MessagesContainer, gsmtap_parser};
 
 use super::{
     connection_redirect_downgrade::ConnectionRedirect2GDowngradeAnalyzer,
+    imsi_exposure_ratio::{ImsiExposureConfig, ImsiExposureRatioAnalyzer},
     imsi_requested::ImsiRequestedAnalyzer, incomplete_sib::IncompleteSibAnalyzer,
     information_element::InformationElement, nas_null_cipher::NasNullCipherAnalyzer,
     null_cipher::NullCipherAnalyzer, priority_2g_downgrade::LteSib6And7DowngradeAnalyzer,
@@ -28,6 +29,8 @@ pub struct AnalyzerConfig {
     pub incomplete_sib: bool,
     pub test_analyzer: bool,
     pub imsi_requested: bool,
+    pub imsi_exposure_ratio: bool,
+    pub imsi_exposure_config: ImsiExposureConfig,
 }
 
 impl Default for AnalyzerConfig {
@@ -41,6 +44,8 @@ impl Default for AnalyzerConfig {
             nas_null_cipher: true,
             incomplete_sib: true,
             test_analyzer: false,
+            imsi_exposure_ratio: true,
+            imsi_exposure_config: ImsiExposureConfig::default(),
         }
     }
 }
@@ -351,6 +356,12 @@ impl Harness {
 
         if analyzer_config.diagnostic_analyzer {
             harness.add_analyzer(Box::new(DiagnosticAnalyzer {}));
+        }
+
+        if analyzer_config.imsi_exposure_ratio {
+            harness.add_analyzer(Box::new(ImsiExposureRatioAnalyzer::new(
+                analyzer_config.imsi_exposure_config.clone(),
+            )));
         }
 
         harness
