@@ -1,6 +1,6 @@
 # Rayhunter Acceptance Tests
 
-Acceptance test suite that exercises a real running Rayhunter daemon via its HTTP API. Talks to a live device — no mocks.
+Acceptance test suite that exercises a real running Rayhunter daemon via its HTTP API. Talks to a live device not mocks.
 
 ## Quick Start
 
@@ -39,14 +39,5 @@ cargo run -p rayhunter-test -- --host <ADDRESS:PORT> --shell adb
 | `security` | 4 | password redaction (GET, POST, log, config.toml) |
 
 Tests that require capabilities not available on the device (e.g. WiFi disabled, no shell access) are automatically marked `ignored`.
-
-## Design
-
-- **No daemon dependency**: response types are redefined as minimal serde structs so the test crate compiles on the host without ARM cross-compilation
-- **`libtest-mimic`**: gives standard `cargo test` UX (filtering, `--list`, `--format json`) with programmatic test registration
-- **State restoration**: tests that modify config save and restore original values
-- **Restart handling**: `wait_for_ready()` polls after config POSTs that trigger daemon restarts
-
-## Not in `default-members`
 
 This crate is in the workspace `members` but not `default-members`, so `cargo build` / `cargo test` won't pick it up. Run explicitly with `-p rayhunter-test`.
