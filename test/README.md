@@ -27,16 +27,16 @@ cargo run -p rayhunter-test -- --host <ADDRESS:PORT> --shell adb
 
 ## Test Groups
 
-| Group | Tests | What it covers |
-|-------|-------|---------------|
-| `config` | 5 | GET shape, SET+restore, restart detection, invalid JSON rejection, SSID stripping |
-| `system` | 5 | system-stats fields, time, invalid time-offset JSON, log endpoint |
-| `recording` | 10 | start/stop, manifest, delete, delete-all, double-start, debug_mode guard, stop idempotency, low disk 507, nonexistent delete, delete while recording |
-| `download` | 4 | QMDL + PCAP + ZIP validation (single recording), 404 for nonexistent downloads |
-| `analysis` | 6 | queue status, polling, report retrieval, live report 503, nonexistent report 404, nonexistent name queuing |
-| `wifi` | 6 | status, scan, rate limit, disable/enable, wrong SSID, missing password |
-| `shell` | 5 | process running, config on disk, DNS, wpa creds, log file |
-| `security` | 4 | password redaction (GET, POST, log, config.toml) |
+| Group | What it covers |
+|-------|---------------|
+| `config` | GET shape, SET+restore, restart detection, invalid JSON rejection, SSID stripping |
+| `system` | system-stats fields, time, invalid time-offset JSON, log endpoint |
+| `recording` | start/stop, manifest, delete, delete-all, double-start, debug_mode guard, stop idempotency, low disk 507, nonexistent delete, delete while recording |
+| `download` | QMDL + PCAP + ZIP validation (single recording), 404 for nonexistent downloads |
+| `analysis` | queue status, polling, report retrieval, live report 503, nonexistent report 404, nonexistent name queuing |
+| `wifi` | status, scan, rate limit, disable/enable, wrong SSID, missing password |
+| `shell` | process running, config on disk, DNS, wpa creds, log file |
+| `security` | password redaction (GET, POST, log, config.toml) |
 
 Tests that require capabilities not available on the device (e.g. WiFi disabled, no shell access) are automatically marked `ignored`.
 
