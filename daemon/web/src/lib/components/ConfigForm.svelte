@@ -48,8 +48,8 @@
             testingNotification = true;
             testMessage = '';
             testMessageType = null;
-            await test_notification();
-            testMessage = 'Test notification sent successfully!';
+            const result = await test_notification();
+            testMessage = result;
             testMessageType = 'success';
         } catch (error) {
             testMessage = `${error}`;
@@ -279,6 +279,76 @@
                         />
                         <p class="text-xs text-gray-500 mt-1">
                             Recording will stop automatically if disk space drops below this level
+                        </p>
+                    </div>
+                </div>
+
+                <div class="border-t pt-4 mt-6 space-y-3">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">
+                        WiFi Client Mode (Orbic only)
+                    </h3>
+                    <p class="text-xs text-gray-500">
+                        Connect the device to an existing WiFi network for internet access (e.g.
+                        notifications). The hotspot AP stays running. Leave both fields empty to
+                        disable.
+                    </p>
+
+                    <div>
+                        <label for="wifi_ssid" class="block text-sm font-medium text-gray-700 mb-1">
+                            WiFi Network Name (SSID)
+                        </label>
+                        <input
+                            id="wifi_ssid"
+                            type="text"
+                            bind:value={config.wifi_ssid}
+                            placeholder="MyWiFiNetwork"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-rayhunter-blue"
+                        />
+                    </div>
+
+                    <div>
+                        <label
+                            for="wifi_password"
+                            class="block text-sm font-medium text-gray-700 mb-1"
+                        >
+                            WiFi Password
+                        </label>
+                        <input
+                            id="wifi_password"
+                            type="password"
+                            bind:value={config.wifi_password}
+                            placeholder={config.wifi_ssid
+                                ? 'Leave blank to keep current password'
+                                : 'password'}
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-rayhunter-blue"
+                        />
+                    </div>
+                </div>
+
+                <div class="border-t pt-4 mt-6 space-y-3">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Meshtastic Integration</h3>
+                    <p class="text-xs text-gray-500">
+                        Send alerts over a Meshtastic LoRa mesh network via a USB-connected device.
+                        Leave empty to disable.
+                    </p>
+
+                    <div>
+                        <label
+                            for="meshtastic_serial_port"
+                            class="block text-sm font-medium text-gray-700 mb-1"
+                        >
+                            Serial Port
+                        </label>
+                        <input
+                            id="meshtastic_serial_port"
+                            type="text"
+                            bind:value={config.meshtastic_serial_port}
+                            placeholder="/dev/ttyACM0"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-rayhunter-blue"
+                        />
+                        <p class="text-xs text-gray-500 mt-1">
+                            /dev/ttyACM0 for nRF52840 devices (MeshPocket, T-Echo), /dev/ttyUSB0 for
+                            CP210x devices (Heltec V3, T-Beam)
                         </p>
                     </div>
                 </div>

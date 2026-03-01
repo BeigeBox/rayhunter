@@ -53,6 +53,7 @@ pub struct DiagTask {
     analysis_sender: Sender<AnalysisCtrlMessage>,
     analyzer_config: AnalyzerConfig,
     notification_channel: tokio::sync::mpsc::Sender<Notification>,
+    meshtastic_channel: Option<tokio::sync::mpsc::Sender<Notification>>,
     min_space_to_start_mb: u64,
     min_space_to_continue_mb: u64,
     state: DiagState,
@@ -101,6 +102,7 @@ impl DiagTask {
         analysis_sender: Sender<AnalysisCtrlMessage>,
         analyzer_config: AnalyzerConfig,
         notification_channel: tokio::sync::mpsc::Sender<Notification>,
+        meshtastic_channel: Option<tokio::sync::mpsc::Sender<Notification>>,
         min_space_to_start_mb: u64,
         min_space_to_continue_mb: u64,
     ) -> Self {
@@ -109,6 +111,7 @@ impl DiagTask {
             analysis_sender,
             analyzer_config,
             notification_channel,
+            meshtastic_channel,
             min_space_to_start_mb,
             min_space_to_continue_mb,
             state: DiagState::Stopped,
@@ -277,14 +280,12 @@ impl DiagTask {
                         );
                         error!("{reason}");
 
-                        self.notification_channel
-                            .send(Notification::new(
-                                NotificationType::Warning,
-                                reason.clone(),
-                                None,
-                            ))
-                            .await
-                            .ok();
+                        let notif =
+                            Notification::new(NotificationType::Warning, reason.clone(), None);
+                        if let Some(ref mesh_tx) = self.meshtastic_channel {
+                            let _ = mesh_tx.send(notif.clone()).await;
+                        }
+                        let _ = self.notification_channel.send(notif).await;
 
                         self.stop(qmdl_store, Some(reason)).await;
                         return;
@@ -293,14 +294,15 @@ impl DiagTask {
                         if !self.low_space_warned {
                             self.low_space_warned = true;
                             warn!("Disk space low: {}MB remaining", mb);
-                            self.notification_channel
-                                .send(Notification::new(
-                                    NotificationType::Warning,
-                                    format!("Disk space low: {}MB free", mb),
-                                    Some(Duration::from_secs(30)),
-                                ))
-                                .await
-                                .ok();
+                            let notif = Notification::new(
+                                NotificationType::Warning,
+                                format!("Disk space low: {}MB free", mb),
+                                Some(Duration::from_secs(30)),
+                            );
+                            if let Some(ref mesh_tx) = self.meshtastic_channel {
+                                let _ = mesh_tx.send(notif.clone()).await;
+                            }
+                            let _ = self.notification_channel.send(notif).await;
                         }
                     }
                     _ => {}
@@ -342,12 +344,16 @@ impl DiagTask {
 
             if max_type > EventType::Informational {
                 info!("a heuristic triggered on this run!");
+                let notif = Notification::new(
+                    NotificationType::Warning,
+                    format!("Rayhunter has detected a {:?} severity event", max_type),
+                    Some(Duration::from_secs(60 * 5)),
+                );
+                if let Some(ref mesh_tx) = self.meshtastic_channel {
+                    let _ = mesh_tx.send(notif.clone()).await;
+                }
                 self.notification_channel
-                    .send(Notification::new(
-                        NotificationType::Warning,
-                        format!("Rayhunter has detected a {:?} severity event", max_type),
-                        Some(Duration::from_secs(60 * 5)),
-                    ))
+                    .send(notif)
                     .await
                     .expect("Failed to send to notification channel");
             }
@@ -380,12 +386,13 @@ pub fn run_diag_read_thread(
     analysis_sender: Sender<AnalysisCtrlMessage>,
     analyzer_config: AnalyzerConfig,
     notification_channel: tokio::sync::mpsc::Sender<Notification>,
+    meshtastic_channel: Option<tokio::sync::mpsc::Sender<Notification>>,
     min_space_to_start_mb: u64,
     min_space_to_continue_mb: u64,
 ) {
     task_tracker.spawn(async move {
         let mut diag_stream = pin!(dev.as_stream().into_stream());
-        let mut diag_task = DiagTask::new(ui_update_sender, analysis_sender, analyzer_config, notification_channel, min_space_to_start_mb, min_space_to_continue_mb);
+        let mut diag_task = DiagTask::new(ui_update_sender, analysis_sender, analyzer_config, notification_channel, meshtastic_channel, min_space_to_start_mb, min_space_to_continue_mb);
         qmdl_file_tx
             .send(DiagDeviceCtrlMessage::StartRecording { response_tx: None })
             .await

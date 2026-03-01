@@ -988,9 +988,9 @@ dependencies = [
 
 [[package]]
 name = "core-foundation"
-version = "0.10.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+checksum = "b55271e5c8c478ad3f38ad24ef34923091e0548492a266d19b3c0b4d82574c63"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -1009,7 +1009,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa95a34622365fa5bbf40b20b75dba8dfa8c94c734aea8ac9a5ca38af14316f1"
 dependencies = [
  "bitflags 2.9.1",
- "core-foundation 0.10.1",
+ "core-foundation 0.10.0",
  "core-graphics-types",
  "foreign-types",
  "libc",
@@ -1022,7 +1022,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d44a101f213f6c4cdc1853d4b78aef6db6bdfa3468798cc1d9912f4735013eb"
 dependencies = [
  "bitflags 2.9.1",
- "core-foundation 0.10.1",
+ "core-foundation 0.10.0",
  "libc",
 ]
 
@@ -3281,6 +3281,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio-serial"
+version = "5.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "029e1f407e261176a983a6599c084efd322d9301028055c87174beac71397ba3"
+dependencies = [
+ "log",
+ "mio",
+ "nix 0.29.0",
+ "serialport",
+ "winapi",
+]
+
+[[package]]
 name = "muda"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3336,6 +3349,17 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nix"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b"
+dependencies = [
+ "bitflags 1.3.2",
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "nix"
@@ -4392,6 +4416,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
 name = "pycrate-rs"
 version = "0.1.0"
 source = "git+https://github.com/EFForg/pycrate-rs#9e72e40bee9c3c09205ad871cf681628b443de7c"
@@ -4722,6 +4769,7 @@ dependencies = [
  "include_dir",
  "libc",
  "log",
+ "prost",
  "rayhunter",
  "reqwest",
  "rustls-rustcrypto",
@@ -4730,6 +4778,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-serial",
  "tokio-stream",
  "tokio-util",
  "toml 0.8.22",
@@ -5346,6 +5395,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "serialport"
+version = "4.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21f60a586160667241d7702c420fc223939fb3c0bb8d3fac84f78768e8970dee"
+dependencies = [
+ "bitflags 2.9.1",
+ "cfg-if",
+ "core-foundation 0.10.0",
+ "core-foundation-sys",
+ "io-kit-sys",
+ "mach2",
+ "nix 0.26.4",
+ "quote",
+ "scopeguard",
+ "unescaper",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "servo_arc"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5644,7 +5712,7 @@ checksum = "f3a753bdc39c07b192151523a3f77cd0394aa75413802c883a0f6f6a0e5ee2e7"
 dependencies = [
  "bitflags 2.9.1",
  "block2 0.6.2",
- "core-foundation 0.10.1",
+ "core-foundation 0.10.0",
  "core-graphics",
  "crossbeam-channel",
  "dispatch",
@@ -6173,6 +6241,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-serial"
+version = "5.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa1d5427f11ba7c5e6384521cfd76f2d64572ff29f3f4f7aa0f496282923fdc8"
+dependencies = [
+ "cfg-if",
+ "futures",
+ "log",
+ "mio-serial",
+ "serialport",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-stream"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6444,6 +6526,15 @@ dependencies = [
  "memoffset",
  "tempfile",
  "winapi",
+]
+
+[[package]]
+name = "unescaper"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4064ed685c487dbc25bd3f0e9548f2e34bab9d18cefc700f9ec2dba74ba1138e"
+dependencies = [
+ "thiserror 2.0.12",
 ]
 
 [[package]]

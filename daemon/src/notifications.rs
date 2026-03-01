@@ -26,10 +26,11 @@ pub enum NotificationType {
     LowBattery,
 }
 
+#[derive(Clone)]
 pub struct Notification {
-    notification_type: NotificationType,
-    message: String,
-    debounce: Option<Duration>,
+    pub notification_type: NotificationType,
+    pub message: String,
+    pub debounce: Option<Duration>,
 }
 
 impl Notification {

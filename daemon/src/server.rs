@@ -37,6 +37,7 @@ pub struct ServerState {
     pub analysis_sender: Sender<AnalysisCtrlMessage>,
     pub daemon_restart_token: CancellationToken,
     pub ui_update_sender: Option<Sender<DisplayState>>,
+    pub meshtastic_sender: Option<Sender<crate::notifications::Notification>>,
 }
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
@@ -134,7 +135,9 @@ pub async fn serve_static(
 pub async fn get_config(
     State(state): State<Arc<ServerState>>,
 ) -> Result<Json<Config>, (StatusCode, String)> {
-    Ok(Json(state.config.clone()))
+    let mut config = state.config.clone();
+    config.wifi_password = None;
+    Ok(Json(config))
 }
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
@@ -157,7 +160,11 @@ pub async fn set_config(
     State(state): State<Arc<ServerState>>,
     Json(config): Json<Config>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    let config_str = toml::to_string_pretty(&config).map_err(|err| {
+    let mut config_to_write = config.clone();
+    config_to_write.wifi_ssid = None;
+    config_to_write.wifi_password = None;
+
+    let config_str = toml::to_string_pretty(&config_to_write).map_err(|err| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to serialize config as TOML: {err}"),
@@ -171,12 +178,58 @@ pub async fn set_config(
         )
     })?;
 
+    update_wifi_creds(&config).await;
+
     // Trigger daemon restart after writing config
     state.daemon_restart_token.cancel();
     Ok((
         StatusCode::ACCEPTED,
         "wrote config and triggered restart".to_string(),
     ))
+}
+
+async fn update_wifi_creds(config: &Config) {
+    let has_ssid = config
+        .wifi_ssid
+        .as_ref()
+        .is_some_and(|s| !s.trim().is_empty());
+    let has_password = config
+        .wifi_password
+        .as_ref()
+        .is_some_and(|s| !s.trim().is_empty());
+
+    let creds_path = crate::config::WIFI_CREDS_PATH;
+
+    if !has_ssid {
+        if tokio::fs::metadata(creds_path).await.is_ok()
+            && let Err(e) = tokio::fs::remove_file(creds_path).await
+        {
+            warn!("failed to remove wifi credentials: {e}");
+        }
+    } else if has_password {
+        let contents = format!(
+            "ssid={}\npassword={}\n",
+            config.wifi_ssid.as_ref().unwrap(),
+            config.wifi_password.as_ref().unwrap()
+        );
+        if let Err(e) = write(creds_path, contents).await {
+            warn!("failed to write wifi credentials: {e}");
+        }
+    } else if let Ok(existing) = tokio::fs::read_to_string(creds_path).await {
+        let existing_password = existing
+            .lines()
+            .find_map(|line| line.strip_prefix("password="));
+        if let Some(password) = existing_password {
+            let contents = format!(
+                "ssid={}\npassword={}\n",
+                config.wifi_ssid.as_ref().unwrap(),
+                password
+            );
+            if let Err(e) = write(creds_path, contents).await {
+                warn!("failed to write wifi credentials: {e}");
+            }
+        }
+    }
 }
 
 #[cfg_attr(feature = "apidocs", utoipa::path(
@@ -194,35 +247,43 @@ pub async fn set_config(
 pub async fn test_notification(
     State(state): State<Arc<ServerState>>,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    let url = state.config.ntfy_url.as_ref().ok_or((
-        StatusCode::BAD_REQUEST,
-        "No notification URL configured".to_string(),
-    ))?;
+    let message = "Test notification from Rayhunter".to_string();
+    let mut results = Vec::new();
 
-    if url.is_empty() {
+    let has_ntfy = state
+        .config
+        .ntfy_url
+        .as_ref()
+        .is_some_and(|u| !u.is_empty());
+    if has_ntfy {
+        let url = state.config.ntfy_url.as_ref().unwrap();
+        let http_client = reqwest::Client::new();
+        match crate::notifications::send_notification(&http_client, url, message.clone()).await {
+            Ok(()) => results.push("ntfy: sent".to_string()),
+            Err(e) => results.push(format!("ntfy: failed ({e})")),
+        }
+    }
+
+    if let Some(ref mesh_tx) = state.meshtastic_sender {
+        let notif = crate::notifications::Notification::new(
+            crate::notifications::NotificationType::Warning,
+            message,
+            None,
+        );
+        match mesh_tx.send(notif).await {
+            Ok(()) => results.push("meshtastic: sent".to_string()),
+            Err(e) => results.push(format!("meshtastic: failed ({e})")),
+        }
+    }
+
+    if results.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Notification URL is empty".to_string(),
+            "No notification channels configured".to_string(),
         ));
     }
 
-    let http_client = reqwest::Client::new();
-    let message = "Test notification from Rayhunter".to_string();
-
-    crate::notifications::send_notification(&http_client, url, message)
-        .await
-        .map(|()| {
-            (
-                StatusCode::OK,
-                "Test notification sent successfully".to_string(),
-            )
-        })
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to send test notification: {e}"),
-            )
-        })
+    Ok((StatusCode::OK, results.join(", ")))
 }
 
 /// Response for GET /api/time
@@ -498,6 +559,7 @@ mod tests {
             analysis_sender: analysis_tx,
             daemon_restart_token: CancellationToken::new(),
             ui_update_sender: None,
+            meshtastic_sender: None,
         })
     }
 
