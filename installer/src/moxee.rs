@@ -10,6 +10,8 @@ pub async fn install(args: MoxeeArgs) -> Result<()> {
         args.admin_password,
         args.reset_config,
         data_dir,
+        None,
+        None,
     )
     .await
 }
