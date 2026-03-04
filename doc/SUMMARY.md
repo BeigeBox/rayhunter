@@ -13,6 +13,7 @@
   - [Rayhunter's heuristics](./heuristics.md)
   - [Re-analyzing recordings](./reanalyzing.md)
   - [How we analyze a capture](./analyzing-a-capture.md)
+  - [Tower Database](./tower-database.md)
 - [Supported devices](./supported-devices.md)
   - [Orbic/Kajeet RC400L](./orbic.md)
   - [TP-Link M7350](./tplink-m7350.md)
@@ -23,3 +24,5 @@
   - [PinePhone and PinePhone Pro](./pinephone.md)
   - [Moxee Hotspot](./moxee.md)
 - [REST API Documentation](./api-docs.md)
+- [Development](./development.md)
+  - [Tower Database Maintenance](./tower-database-developer.md)
