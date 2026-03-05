@@ -382,6 +382,12 @@ impl Harness {
             events: Vec::new(),
         };
         let gsmtap_offset = 20 + 8;
+        let packet_offset = gsmtap_offset + 16;
+        if packet.data.len() < packet_offset {
+            row.skipped_message_reason =
+                Some(format!("packet too short ({} bytes)", packet.data.len()));
+            return row;
+        }
         let gsmtap_data = &packet.data[gsmtap_offset..];
         // the type and subtype are at byte offsets 3 and 13, respectively
         let gsmtap_header = match GsmtapType::new(gsmtap_data[2], gsmtap_data[12]) {
@@ -391,7 +397,6 @@ impl Harness {
                 return row;
             }
         };
-        let packet_offset = gsmtap_offset + 16;
         let packet_data = &packet.data[packet_offset..];
         let gsmtap_message = GsmtapMessage {
             header: gsmtap_header,
