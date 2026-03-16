@@ -5,6 +5,8 @@ pub mod diag;
 pub mod display;
 pub mod error;
 pub mod key_input;
+#[cfg(feature = "tft-ui")]
+pub mod network;
 pub mod notifications;
 pub mod pcap;
 pub mod qmdl_store;

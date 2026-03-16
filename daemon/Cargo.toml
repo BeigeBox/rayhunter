@@ -18,6 +18,7 @@ default = ["rustcrypto-tls"]
 rustcrypto-tls = ["reqwest/rustls-tls-webpki-roots-no-provider", "dep:rustls-rustcrypto"]
 ring-tls = ["reqwest/rustls-tls-webpki-roots"]
 apidocs = ["dep:utoipa"]
+tft-ui = ["dep:embedded-graphics"]
 
 [dependencies]
 rayhunter = { path = "../lib" }
@@ -43,3 +44,4 @@ reqwest = { version = "0.12.20", default-features = false }
 rustls-rustcrypto = { version = "0.0.2-alpha", optional = true }
 async-trait = "0.1.88"
 utoipa = { version = "5.4.0", optional = true }
+embedded-graphics = { version = "0.8", optional = true }
