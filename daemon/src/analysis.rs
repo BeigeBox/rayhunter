@@ -8,7 +8,9 @@ use axum::{
 };
 use futures::TryStreamExt;
 use log::{error, info};
-use rayhunter::analysis::analyzer::{AnalyzerConfig, CellInfo, EventType, Harness};
+use rayhunter::analysis::analyzer::{
+    AnalyzerConfig, CellInfo, EVENT_TYPE_COUNT, EventType, Harness,
+};
 use rayhunter::diag::{DataType, MessagesContainer};
 use rayhunter::qmdl::QmdlReader;
 use serde::Serialize;
@@ -29,7 +31,7 @@ pub struct LastEventInfo {
 
 pub struct AnalysisSummary {
     pub max_type: EventType,
-    pub event_counts: [u32; 4],
+    pub event_counts: [u32; EVENT_TYPE_COUNT],
     pub last_event: Option<LastEventInfo>,
     pub cell_info: CellInfo,
 }
@@ -72,7 +74,7 @@ impl AnalysisWriter {
     ) -> Result<AnalysisSummary, std::io::Error> {
         let mut summary = AnalysisSummary {
             max_type: EventType::Informational,
-            event_counts: [0; 4],
+            event_counts: [0; EVENT_TYPE_COUNT],
             last_event: None,
             cell_info: CellInfo::default(),
         };

@@ -18,7 +18,7 @@ default = ["rustcrypto-tls"]
 rustcrypto-tls = ["reqwest/rustls-tls-webpki-roots-no-provider", "dep:rustls-rustcrypto"]
 ring-tls = ["reqwest/rustls-tls-webpki-roots"]
 apidocs = ["dep:utoipa"]
-orbic-ui = ["dep:embedded-graphics"]
+tft-ui = ["dep:embedded-graphics"]
 
 [dependencies]
 rayhunter = { path = "../lib" }

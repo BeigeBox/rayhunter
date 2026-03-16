@@ -5,7 +5,7 @@ mod diag;
 mod display;
 mod error;
 mod key_input;
-#[cfg(feature = "orbic-ui")]
+#[cfg(feature = "tft-ui")]
 mod network;
 mod notifications;
 mod pcap;
@@ -16,7 +16,7 @@ mod stats;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::battery::run_battery_notification_worker;
+use crate::battery::{SystemPollerConfig, run_system_poller};
 use crate::config::{parse_args, parse_config};
 use crate::diag::run_diag_read_thread;
 use crate::error::RayhunterError;
@@ -216,18 +216,20 @@ async fn run_with_config(
 
     let notification_service = NotificationService::new(config.ntfy_url.clone());
 
-    #[cfg(feature = "orbic-ui")]
+    #[cfg(feature = "tft-ui")]
     let device_handle: Option<display::DeviceInfoHandle> = if matches!(config.device, Device::Orbic)
     {
         let mut di = display::DeviceInfo::new(config.colorblind_mode, config.port);
         let (ap_ssid, ap_password) = network::read_ap_credentials().await;
         di.ap_ssid = ap_ssid;
         di.ap_password = ap_password;
-        di.wifi_ssid = network::read_wifi_ssid();
+        di.ap_ip = network::read_ap_ip().await;
         Some(display::DeviceInfoHandle::new(di))
     } else {
         None
     };
+    #[cfg(not(feature = "tft-ui"))]
+    let device_handle: Option<display::DeviceInfoHandle> = None;
 
     if !config.debug_mode {
         info!("Using configuration for device: {0:?}", config.device);
@@ -244,19 +246,20 @@ async fn run_with_config(
             dev,
             diag_rx,
             diag_tx.clone(),
-            ui_update_tx.clone(),
             qmdl_store_lock.clone(),
-            analysis_tx.clone(),
-            config.analyzers.clone(),
-            notification_service.new_handler(),
-            config.min_space_to_start_recording_mb,
-            config.min_space_to_continue_recording_mb,
-            #[cfg(feature = "orbic-ui")]
-            device_handle.clone(),
+            diag::DiagTaskConfig {
+                ui_update_sender: ui_update_tx.clone(),
+                analysis_sender: analysis_tx.clone(),
+                analyzer_config: config.analyzers.clone(),
+                notification_channel: notification_service.new_handler(),
+                min_space_to_start_mb: config.min_space_to_start_recording_mb,
+                min_space_to_continue_mb: config.min_space_to_continue_recording_mb,
+                device_handle: device_handle.clone(),
+            },
         );
         info!("Starting UI");
 
-        #[cfg(feature = "orbic-ui")]
+        #[cfg(feature = "tft-ui")]
         if let Some(ref handle) = device_handle {
             display::orbic::update_ui(&task_tracker, handle.clone(), shutdown_token.clone());
         } else {
@@ -271,7 +274,7 @@ async fn run_with_config(
             update_ui(&task_tracker, &config, shutdown_token.clone(), ui_update_rx);
         }
 
-        #[cfg(not(feature = "orbic-ui"))]
+        #[cfg(not(feature = "tft-ui"))]
         {
             let update_ui = match &config.device {
                 Device::Orbic => display::orbic::update_ui,
@@ -310,13 +313,15 @@ async fn run_with_config(
         analysis_tx.clone(),
     );
 
-    run_battery_notification_worker(
+    run_system_poller(
         &task_tracker,
-        config.device.clone(),
-        notification_service.new_handler(),
-        shutdown_token.clone(),
-        #[cfg(feature = "orbic-ui")]
-        device_handle.clone(),
+        SystemPollerConfig {
+            device: config.device.clone(),
+            notification_channel: notification_service.new_handler(),
+            shutdown_token: shutdown_token.clone(),
+            device_handle: device_handle.clone(),
+            qmdl_store_path: config.qmdl_store_path.clone().into(),
+        },
     );
 
     run_notification_worker(
@@ -324,42 +329,6 @@ async fn run_with_config(
         notification_service,
         config.enabled_notifications.clone(),
     );
-
-    #[cfg(feature = "orbic-ui")]
-    if let Some(ref handle) = device_handle {
-        let h = handle.clone();
-        let qmdl_path = config.qmdl_store_path.clone();
-        let st = shutdown_token.clone();
-        task_tracker.spawn(async move {
-            loop {
-                let (connected, ip) = network::poll_wifi_status().await;
-                h.update(|info| {
-                    if let Ok(disk) = stats::DiskStats::new(&qmdl_path) {
-                        if let Some(avail) = disk.available_bytes {
-                            info.disk_available_mb = (avail / (1024 * 1024)) as u32;
-                        }
-                        if let Some(total) = disk.total_bytes {
-                            info.disk_total_mb = (total / (1024 * 1024)) as u32;
-                        }
-                    }
-                    if let Ok((total_kb, avail_kb)) = stats::read_memory_kb() {
-                        info.mem_total_mb = (total_kb / 1024) as u32;
-                        info.mem_free_mb = (avail_kb / 1024) as u32;
-                    }
-                    if let Ok(secs) = stats::read_uptime_secs() {
-                        info.uptime_secs = secs;
-                    }
-                    info.wifi_connected = connected;
-                    info.wifi_ip = ip;
-                })
-                .await;
-                tokio::select! {
-                    _ = st.cancelled() => break,
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {},
-                }
-            }
-        });
-    }
 
     let state = Arc::new(ServerState {
         config_path: args.config_path.clone(),

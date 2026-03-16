@@ -1,12 +1,18 @@
-use rayhunter::analysis::analyzer::EventType;
-use serde::{Deserialize, Serialize};
-
-#[cfg(feature = "orbic-ui")]
 use std::sync::Arc;
-#[cfg(feature = "orbic-ui")]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rayhunter::analysis::analyzer::{EVENT_TYPE_COUNT, EventType};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, RwLock};
 
 mod generic_framebuffer;
+
+fn rgb888_to_rgb565(r: u8, g: u8, b: u8) -> u16 {
+    let mut val: u16 = (r as u16 & 0b11111000) << 8;
+    val |= (g as u16 & 0b11111100) << 3;
+    val |= (b as u16) >> 3;
+    val
+}
 
 pub mod headless;
 pub mod orbic;
@@ -32,14 +38,13 @@ pub enum DisplayState {
     WarningDetected { event_type: EventType },
 }
 
-#[cfg(feature = "orbic-ui")]
 #[derive(Clone, Copy)]
 pub enum StoppedReason {
     DiskFull,
     DiagError,
 }
 
-#[cfg(feature = "orbic-ui")]
+#[allow(dead_code)]
 pub struct DeviceInfo {
     pub display_state: DisplayState,
     pub disk_available_mb: u32,
@@ -53,22 +58,19 @@ pub struct DeviceInfo {
     pub version: &'static str,
     pub ap_ssid: Option<String>,
     pub ap_password: Option<String>,
+    pub ap_ip: Option<String>,
     pub ap_port: u16,
-    pub wifi_ssid: Option<String>,
-    pub wifi_connected: bool,
-    pub wifi_ip: Option<String>,
-    pub event_counts: [u32; 4],
+    pub event_counts: [u32; EVENT_TYPE_COUNT],
     pub last_event_time: Option<String>,
     pub last_event_name: Option<String>,
     pub last_event_severity: Option<EventType>,
     pub low_disk: bool,
     pub stopped_reason: Option<StoppedReason>,
-    pub wake_display: bool,
     pub mcc_mnc: Option<String>,
     pub rsrp_dbm: Option<i16>,
 }
 
-#[cfg(feature = "orbic-ui")]
+#[allow(dead_code)]
 impl DeviceInfo {
     pub fn new(colorblind_mode: bool, ap_port: u16) -> Self {
         Self {
@@ -84,36 +86,34 @@ impl DeviceInfo {
             version: env!("CARGO_PKG_VERSION"),
             ap_ssid: None,
             ap_password: None,
+            ap_ip: None,
             ap_port,
-            wifi_ssid: None,
-            wifi_connected: false,
-            wifi_ip: None,
-            event_counts: [0; 4],
+            event_counts: [0; EVENT_TYPE_COUNT],
             last_event_time: None,
             last_event_name: None,
             last_event_severity: None,
             low_disk: false,
             stopped_reason: None,
-            wake_display: false,
             mcc_mnc: None,
             rsrp_dbm: None,
         }
     }
 }
 
-#[cfg(feature = "orbic-ui")]
 #[derive(Clone)]
 pub struct DeviceInfoHandle {
     inner: Arc<RwLock<DeviceInfo>>,
     notify: Arc<Notify>,
+    wake_display: Arc<AtomicBool>,
 }
 
-#[cfg(feature = "orbic-ui")]
+#[allow(dead_code)]
 impl DeviceInfoHandle {
     pub fn new(info: DeviceInfo) -> Self {
         Self {
             inner: Arc::new(RwLock::new(info)),
             notify: Arc::new(Notify::new()),
+            wake_display: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -127,11 +127,16 @@ impl DeviceInfoHandle {
         self.inner.read().await
     }
 
-    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, DeviceInfo> {
-        self.inner.write().await
-    }
-
     pub fn notify_ref(&self) -> &Notify {
         &self.notify
+    }
+
+    pub fn set_wake(&self) {
+        self.wake_display.store(true, Ordering::Release);
+        self.notify.notify_one();
+    }
+
+    pub fn take_wake(&self) -> bool {
+        self.wake_display.swap(false, Ordering::AcqRel)
     }
 }

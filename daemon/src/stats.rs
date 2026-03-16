@@ -156,7 +156,7 @@ impl MemoryStats {
     }
 }
 
-#[cfg(feature = "orbic-ui")]
+#[cfg(feature = "tft-ui")]
 pub fn read_memory_kb() -> Result<(usize, usize), String> {
     let contents =
         std::fs::read_to_string("/proc/meminfo").map_err(|e| format!("read /proc/meminfo: {e}"))?;
@@ -178,7 +178,7 @@ pub fn read_memory_kb() -> Result<(usize, usize), String> {
     ))
 }
 
-#[cfg(feature = "orbic-ui")]
+#[cfg(feature = "tft-ui")]
 pub fn read_uptime_secs() -> Result<u64, String> {
     let contents =
         std::fs::read_to_string("/proc/uptime").map_err(|e| format!("read /proc/uptime: {e}"))?;

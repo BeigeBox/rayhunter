@@ -1,8 +1,6 @@
 use log::warn;
 
 const HOSTAPD_CONF_PATH: &str = "/tmp/hostapd_wlan0.conf";
-const WIFI_CREDS_PATH: &str = "/data/rayhunter/wifi-creds.conf";
-const WLAN1_OPERSTATE_PATH: &str = "/sys/class/net/wlan1/operstate";
 
 pub async fn read_ap_credentials() -> (Option<String>, Option<String>) {
     use std::os::unix::fs::PermissionsExt;
@@ -47,43 +45,18 @@ pub async fn read_ap_credentials() -> (Option<String>, Option<String>) {
     (ssid, password)
 }
 
-pub fn read_wifi_ssid() -> Option<String> {
-    let contents = std::fs::read_to_string(WIFI_CREDS_PATH).ok()?;
-    for line in contents.lines() {
-        if let Some(val) = line.strip_prefix("ssid=") {
-            return Some(val.to_string());
-        }
-    }
-    None
-}
-
-pub async fn poll_wifi_status() -> (bool, Option<String>) {
-    let connected = match tokio::fs::read_to_string(WLAN1_OPERSTATE_PATH).await {
-        Ok(s) => s.trim() == "up",
-        Err(_) => false,
-    };
-
-    if !connected {
-        return (false, None);
-    }
-
-    let ip = match tokio::process::Command::new("ip")
-        .args(["addr", "show", "wlan1"])
+pub async fn read_ap_ip() -> Option<String> {
+    let output = tokio::process::Command::new("ip")
+        .args(["addr", "show", "wlan0"])
         .output()
         .await
-    {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout.lines().find_map(|line| {
-                let trimmed = line.trim();
-                trimmed
-                    .strip_prefix("inet ")
-                    .and_then(|rest| rest.split('/').next())
-                    .map(|s| s.to_string())
-            })
-        }
-        Err(_) => None,
-    };
-
-    (true, ip)
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .strip_prefix("inet ")
+            .and_then(|rest| rest.split('/').next())
+            .map(|s| s.to_string())
+    })
 }

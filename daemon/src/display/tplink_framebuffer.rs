@@ -52,11 +52,7 @@ impl GenericFramebuffer for Framebuffer {
 
         let mut raw_buffer = Vec::with_capacity(buffer.len() * 2);
         for (r, g, b) in buffer {
-            let mut rgb565: u16 = (r as u16 & 0b11111000) << 8;
-            rgb565 |= (g as u16 & 0b11111100) << 3;
-            rgb565 |= (b as u16) >> 3;
-            // note: big-endian!
-            raw_buffer.extend(rgb565.to_be_bytes());
+            raw_buffer.extend(super::rgb888_to_rgb565(r, g, b).to_be_bytes());
         }
 
         f.write_all(&raw_buffer).await.unwrap();

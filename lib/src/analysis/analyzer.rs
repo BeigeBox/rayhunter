@@ -64,6 +64,8 @@ pub enum EventType {
     High = 3,
 }
 
+pub const EVENT_TYPE_COUNT: usize = 4;
+
 impl<'de> Deserialize<'de> for EventType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

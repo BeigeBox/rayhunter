@@ -3,31 +3,25 @@ use log::error;
 const FB_PATH: &str = "/dev/fb0";
 const BL_GPIO_PATH: &str = "/sys/devices/78b6000.spi/spi_master/spi1/spi1.0/bl_gpio";
 
-fn set_backlight(on: bool) {
+#[allow(dead_code)]
+async fn set_backlight(on: bool) {
     let val = if on { "1" } else { "0" };
-    if let Err(e) = std::fs::write(BL_GPIO_PATH, val) {
+    if let Err(e) = tokio::fs::write(BL_GPIO_PATH, val).await {
         error!("failed to set backlight via {BL_GPIO_PATH}: {e}");
     }
 }
 
-#[cfg(feature = "orbic-ui")]
-async fn write_fb_rgb565(rgb888: &[u8]) {
-    let mut raw = Vec::with_capacity(rgb888.len() / 3 * 2);
+#[cfg(feature = "tft-ui")]
+fn convert_rgb888_to_rgb565(rgb888: &[u8], out: &mut Vec<u8>) {
+    out.clear();
     for chunk in rgb888.chunks_exact(3) {
-        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        let mut rgb565: u16 = (r as u16 & 0b11111000) << 8;
-        rgb565 |= (g as u16 & 0b11111100) << 3;
-        rgb565 |= (b as u16) >> 3;
-        raw.extend(rgb565.to_le_bytes());
-    }
-    if let Err(e) = tokio::fs::write(FB_PATH, &raw).await {
-        error!("failed to write framebuffer: {e}");
+        out.extend(super::rgb888_to_rgb565(chunk[0], chunk[1], chunk[2]).to_le_bytes());
     }
 }
 
-// ── orbic-ui: full text-based UI with screen cycling ────────────────
+// ── tft-ui: full text-based UI with screen cycling ────────────────
 
-#[cfg(feature = "orbic-ui")]
+#[cfg(feature = "tft-ui")]
 mod ui {
     use std::time::{Duration, Instant};
 
@@ -40,20 +34,30 @@ mod ui {
     use embedded_graphics::prelude::*;
     use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
     use embedded_graphics::text::{Alignment, Text};
-    use log::{info, warn};
+    use log::{error, info, warn};
     use tokio::fs::File;
     use tokio::io::AsyncReadExt;
     use tokio_util::sync::CancellationToken;
     use tokio_util::task::TaskTracker;
 
     use crate::display::{DeviceInfo, DeviceInfoHandle, DisplayState, StoppedReason};
-    use rayhunter::analysis::analyzer::EventType;
+    use rayhunter::analysis::analyzer::{EVENT_TYPE_COUNT, EventType};
 
     const WIDTH: usize = 128;
     const HEIGHT: usize = 128;
     const CX: i32 = WIDTH as i32 / 2;
     const HEADER_HEIGHT: u32 = 52;
-    const INPUT_EVENT_SIZE: usize = 32;
+    #[cfg(target_pointer_width = "32")]
+    const INPUT_EVENT_SIZE: usize = 16;
+    #[cfg(target_pointer_width = "64")]
+    const INPUT_EVENT_SIZE: usize = 24;
+
+    #[cfg(target_pointer_width = "32")]
+    const EV_TYPE_OFFSET: usize = 8;
+    #[cfg(target_pointer_width = "64")]
+    const EV_TYPE_OFFSET: usize = 16;
+
+    const EV_KEY: u16 = 1;
 
     const GREEN: Rgb888 = Rgb888::new(0x00, 0xC8, 0x53);
     const BLUE: Rgb888 = Rgb888::new(0x00, 0x91, 0xEA);
@@ -65,14 +69,11 @@ mod ui {
     const SEPARATOR: Rgb888 = Rgb888::new(0x33, 0x33, 0x33);
     const LIGHT_GRAY: Rgb888 = Rgb888::new(0xE0, 0xE0, 0xE0);
     const MID_GRAY: Rgb888 = Rgb888::new(0xAA, 0xAA, 0xAA);
-    const DIM_GRAY: Rgb888 = Rgb888::new(0x77, 0x77, 0x77);
     const DARK_GRAY: Rgb888 = Rgb888::new(0x66, 0x66, 0x66);
-    const DARKER_GRAY: Rgb888 = Rgb888::new(0x44, 0x44, 0x44);
 
-    const BOOT_ORCA_40: &[u8] = include_bytes!("../../images/boot_orca_40.png");
-    const BOOT_ORCA_60: &[u8] = include_bytes!("../../images/boot_orca_60.png");
-    const BOOT_LOGO_73: &[u8] = include_bytes!("../../images/boot_logo_73.png");
-    const BOOT_LOGO_67: &[u8] = include_bytes!("../../images/boot_logo_67.png");
+    const BOOT_LOGO_RGBA: &[u8] = include_bytes!("../../images/boot_logo_73.rgba");
+    const LOGO_W: usize = 73;
+    const LOGO_H: usize = 22;
 
     #[derive(Clone, Copy, PartialEq)]
     enum Screen {
@@ -110,6 +111,22 @@ mod ui {
                 EventType::Medium => ORANGE,
                 EventType::High => RED,
             },
+        }
+    }
+
+    fn pill_bg_for(header_color: Rgb888, info: &DeviceInfo) -> Rgb888 {
+        if header_color == RED {
+            Rgb888::new(0x75, 0x00, 0x00)
+        } else if header_color == YELLOW {
+            Rgb888::new(0x8C, 0x76, 0x00)
+        } else if header_color == ORANGE {
+            Rgb888::new(0x8C, 0x3C, 0x00)
+        } else if header_color == LIGHT_GRAY {
+            Rgb888::new(0x40, 0x40, 0x40)
+        } else if info.colorblind_mode {
+            Rgb888::new(0x00, 0x50, 0x81)
+        } else {
+            Rgb888::new(0x00, 0x6E, 0x2E)
         }
     }
 
@@ -167,28 +184,24 @@ mod ui {
         { embedded_graphics::framebuffer::buffer_size::<Rgb888>(WIDTH, HEIGHT) },
     >;
 
-    fn blit_png(fb: &mut EgFramebuffer, png_bytes: &[u8], x_offset: i32, y_offset: i32) {
-        if let Ok(img) = image::load_from_memory(png_bytes) {
-            let rgba = img.to_rgba8();
-            for (x, y, pixel) in rgba.enumerate_pixels() {
-                if pixel[3] > 0 {
-                    let color = Rgb888::new(pixel[0], pixel[1], pixel[2]);
-                    Pixel(Point::new(x as i32 + x_offset, y as i32 + y_offset), color)
-                        .draw(fb)
-                        .ok();
-                }
+    fn draw_logo(fb: &mut EgFramebuffer, x_offset: i32, y_offset: i32) {
+        for i in 0..(LOGO_W * LOGO_H) {
+            let off = i * 4;
+            if BOOT_LOGO_RGBA[off + 3] > 0 {
+                Pixel(
+                    Point::new(
+                        (i % LOGO_W) as i32 + x_offset,
+                        (i / LOGO_W) as i32 + y_offset,
+                    ),
+                    Rgb888::new(
+                        BOOT_LOGO_RGBA[off],
+                        BOOT_LOGO_RGBA[off + 1],
+                        BOOT_LOGO_RGBA[off + 2],
+                    ),
+                )
+                .draw(fb)
+                .ok();
             }
-        }
-    }
-
-    fn pill_bg_for_block(color: Rgb888) -> Rgb888 {
-        match color {
-            GREEN => Rgb888::new(0x00, 0x6E, 0x2E),
-            YELLOW => Rgb888::new(0x8C, 0x76, 0x00),
-            ORANGE => Rgb888::new(0x8C, 0x3C, 0x00),
-            RED => Rgb888::new(0x75, 0x00, 0x00),
-            BLUE => Rgb888::new(0x00, 0x50, 0x81),
-            _ => Rgb888::new(0x40, 0x40, 0x40),
         }
     }
 
@@ -210,7 +223,7 @@ mod ui {
         }
     }
 
-    fn highest_severity_color(counts: &[u32; 4]) -> Rgb888 {
+    fn highest_severity_color(counts: &[u32; EVENT_TYPE_COUNT]) -> Rgb888 {
         if counts[EventType::High as usize] > 0 {
             RED
         } else if counts[EventType::Medium as usize] > 0 {
@@ -219,63 +232,6 @@ mod ui {
             YELLOW
         } else {
             MID_GRAY
-        }
-    }
-
-    async fn boot_animation(
-        fb: &mut EgFramebuffer,
-        handle: &DeviceInfoHandle,
-        shutdown_token: &CancellationToken,
-    ) {
-        let dot_style = MonoTextStyle::new(&FONT_6X10, SEPARATOR);
-
-        // Frame 1: "..."
-        fb.clear(Rgb888::BLACK).ok();
-        draw_text(fb, "...", 70, &dot_style);
-        super::write_fb_rgb565(fb.data()).await;
-
-        tokio::select! {
-            _ = shutdown_token.cancelled() => return,
-            _ = tokio::time::sleep(Duration::from_millis(500)) => {},
-        }
-
-        // Frame 2: small orca
-        fb.clear(Rgb888::BLACK).ok();
-        blit_png(fb, BOOT_ORCA_40, 44, 44);
-        super::write_fb_rgb565(fb.data()).await;
-
-        tokio::select! {
-            _ = shutdown_token.cancelled() => return,
-            _ = tokio::time::sleep(Duration::from_millis(800)) => {},
-        }
-
-        // Frame 3: large orca + logo + version, hold until Recording
-        fb.clear(Rgb888::BLACK).ok();
-        blit_png(fb, BOOT_ORCA_60, 34, 10);
-        blit_png(fb, BOOT_LOGO_67, 30, 78);
-        let ver_style = MonoTextStyle::new(&FONT_5X7, DIM_GRAY);
-        let ver = format!("v{}", env!("CARGO_PKG_VERSION"));
-        draw_text(fb, &ver, 108, &ver_style);
-        super::write_fb_rgb565(fb.data()).await;
-
-        // Hold frame 3 for at least 1500ms, then wait for Recording state
-        tokio::select! {
-            _ = shutdown_token.cancelled() => return,
-            _ = tokio::time::sleep(Duration::from_millis(1500)) => {},
-        }
-
-        loop {
-            {
-                let info = handle.read().await;
-                if matches!(info.display_state, DisplayState::Recording) {
-                    break;
-                }
-            }
-            tokio::select! {
-                _ = shutdown_token.cancelled() => return,
-                _ = handle.notify_ref().notified() => {},
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {},
-            }
         }
     }
 
@@ -290,7 +246,7 @@ mod ui {
             .draw(fb)
             .ok();
 
-        blit_png(fb, BOOT_LOGO_73, 27, 8);
+        draw_logo(fb, 27, 8);
 
         let pill_text = if info.stopped_reason.is_some() {
             Some("ERROR")
@@ -310,7 +266,7 @@ mod ui {
             let pill_w = text.len() as u32 * 5 + 8;
             let pill_x = (WIDTH as u32 - pill_w) / 2;
             Rectangle::new(Point::new(pill_x as i32, 36), Size::new(pill_w, 12))
-                .into_styled(PrimitiveStyle::with_fill(pill_bg_for_block(color)))
+                .into_styled(PrimitiveStyle::with_fill(pill_bg_for(color, info)))
                 .draw(fb)
                 .ok();
             let pill_style = MonoTextStyle::new(&FONT_5X7, Rgb888::WHITE);
@@ -367,7 +323,7 @@ mod ui {
         } else {
             let total: u32 = info.event_counts.iter().sum();
             let footer_color = if total == 0 {
-                DIM_GRAY
+                Rgb888::new(0x77, 0x77, 0x77)
             } else {
                 highest_severity_color(&info.event_counts)
             };
@@ -399,34 +355,11 @@ mod ui {
             None => draw_text(fb, "Pass: N/A", 50, &pass_style),
         }
 
-        let addr = format!("192.168.1.1:{}", info.ap_port);
+        let addr = match info.ap_ip.as_deref() {
+            Some(ip) => format!("{ip}:{}", info.ap_port),
+            None => format!("port:{}", info.ap_port),
+        };
         draw_text(fb, &addr, 60, &ip_style);
-
-        draw_separator(fb, 68);
-
-        draw_text(fb, "WiFi Client", 78, &section_style);
-
-        let dim_style = MonoTextStyle::new(&FONT_5X8, DARK_GRAY);
-
-        if info.wifi_connected {
-            if let Some(ref ssid) = info.wifi_ssid {
-                draw_text(fb, ssid, 88, &data_style);
-            }
-            if let Some(ref ip) = info.wifi_ip {
-                draw_text(fb, ip, 98, &data_style);
-            }
-        } else if info.wifi_ssid.is_some() {
-            draw_text(fb, "not connected", 88, &dim_style);
-        } else {
-            draw_text(fb, "not configured", 88, &dim_style);
-        }
-
-        draw_separator(fb, 108);
-
-        if info.wifi_connected {
-            let footer_style = MonoTextStyle::new(&FONT_4X6, accent_color(info));
-            draw_text(fb, "WEB UI AVAILABLE", 118, &footer_style);
-        }
     }
 
     // ── Screen 3: System ────────────────────────────────────────────
@@ -486,7 +419,7 @@ mod ui {
 
         let total: u32 = info.event_counts.iter().sum();
         if total == 0 {
-            let empty_style = MonoTextStyle::new(&FONT_5X8, DARKER_GRAY);
+            let empty_style = MonoTextStyle::new(&FONT_5X8, Rgb888::new(0x44, 0x44, 0x44));
             draw_text(fb, "No events", 60, &empty_style);
             draw_text(fb, "detected", 72, &empty_style);
 
@@ -525,10 +458,12 @@ mod ui {
                 .map(severity_color)
                 .unwrap_or(MID_GRAY);
             let name_style = MonoTextStyle::new(&FONT_5X7, name_color);
-            if name.len() > 20 {
-                draw_text(fb, &name[..20], 100, &name_style);
-                let end = name.len().min(40);
-                draw_text(fb, &name[20..end], 108, &name_style);
+            let chars: Vec<char> = name.chars().take(40).collect();
+            if chars.len() > 20 {
+                let line1: String = chars[..20].iter().collect();
+                let line2: String = chars[20..].iter().collect();
+                draw_text(fb, &line1, 100, &name_style);
+                draw_text(fb, &line2, 108, &name_style);
             } else {
                 draw_text(fb, name, 100, &name_style);
             }
@@ -539,7 +474,6 @@ mod ui {
 
     struct InputButton {
         file: Option<File>,
-        last_event: Option<Instant>,
     }
 
     impl InputButton {
@@ -551,10 +485,7 @@ mod ui {
                     None
                 }
             };
-            Self {
-                file,
-                last_event: None,
-            }
+            Self { file }
         }
 
         async fn next_press(&mut self) {
@@ -573,16 +504,14 @@ mod ui {
                     return;
                 }
 
-                let now = Instant::now();
-                if let Some(last) = self.last_event
-                    && now.duration_since(last) < Duration::from_millis(50)
-                {
-                    self.last_event = Some(now);
-                    continue;
-                }
-                self.last_event = Some(now);
-
-                if buf[12] == 0 {
+                let ev_type = u16::from_ne_bytes([buf[EV_TYPE_OFFSET], buf[EV_TYPE_OFFSET + 1]]);
+                let ev_value = i32::from_ne_bytes([
+                    buf[EV_TYPE_OFFSET + 4],
+                    buf[EV_TYPE_OFFSET + 5],
+                    buf[EV_TYPE_OFFSET + 6],
+                    buf[EV_TYPE_OFFSET + 7],
+                ]);
+                if ev_type == EV_KEY && ev_value == 1 {
                     return;
                 }
             }
@@ -598,15 +527,15 @@ mod ui {
         handle: DeviceInfoHandle,
         shutdown_token: CancellationToken,
     ) {
-        info!("enabling Orbic backlight via {}", super::BL_GPIO_PATH);
-        super::set_backlight(true);
-
         task_tracker.spawn(async move {
+            info!("enabling Orbic backlight via {}", super::BL_GPIO_PATH);
+            super::set_backlight(true).await;
+
             let mut fb = EgFramebuffer::new();
+            let mut rgb565_buf = Vec::with_capacity(WIDTH * HEIGHT * 2);
+            let mut prev_fb_hash: u64 = 0;
             let mut wps = InputButton::open("/dev/input/event1").await;
             let mut pwr = InputButton::open("/dev/input/event0").await;
-
-            boot_animation(&mut fb, &handle, &shutdown_token).await;
 
             let mut screen = Screen::Status;
             let mut backlight_on = true;
@@ -629,10 +558,20 @@ mod ui {
                 }
 
                 if backlight_on {
-                    super::write_fb_rgb565(fb.data()).await;
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    fb.data().hash(&mut hasher);
+                    let new_hash = hasher.finish();
+                    if new_hash != prev_fb_hash {
+                        prev_fb_hash = new_hash;
+                        super::convert_rgb888_to_rgb565(fb.data(), &mut rgb565_buf);
+                        if let Err(e) = tokio::fs::write(super::FB_PATH, &rgb565_buf).await {
+                            error!("failed to write framebuffer: {e}");
+                        }
+                    }
 
                     if last_activity.elapsed() >= SCREEN_TIMEOUT {
-                        super::set_backlight(false);
+                        super::set_backlight(false).await;
                         backlight_on = false;
                     }
                 }
@@ -640,12 +579,9 @@ mod ui {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
                     _ = handle.notify_ref().notified() => {
-                        let mut info = handle.write().await;
-                        if info.wake_display {
-                            info.wake_display = false;
-                            drop(info);
+                        if handle.take_wake() {
                             if !backlight_on {
-                                super::set_backlight(true);
+                                super::set_backlight(true).await;
                                 backlight_on = true;
                                 screen = Screen::Status;
                             }
@@ -659,7 +595,7 @@ mod ui {
                         if backlight_on {
                             screen = screen.next();
                         } else {
-                            super::set_backlight(true);
+                            super::set_backlight(true).await;
                             backlight_on = true;
                         }
                         last_activity = Instant::now();
@@ -673,7 +609,7 @@ mod ui {
 
 // ── fallback: existing GenericFramebuffer colored-line path ───────────
 
-#[cfg(not(feature = "orbic-ui"))]
+#[cfg(not(feature = "tft-ui"))]
 mod fallback {
     use crate::config;
     use crate::display::DisplayState;
@@ -697,14 +633,13 @@ mod fallback {
         }
 
         async fn write_buffer(&mut self, buffer: Vec<(u8, u8, u8)>) {
-            let mut raw_buffer = Vec::new();
+            let mut raw_buffer = Vec::with_capacity(buffer.len() * 2);
             for (r, g, b) in buffer {
-                let mut rgb565: u16 = (r as u16 & 0b11111000) << 8;
-                rgb565 |= (g as u16 & 0b11111100) << 3;
-                rgb565 |= (b as u16) >> 3;
-                raw_buffer.extend(rgb565.to_le_bytes());
+                raw_buffer.extend(crate::display::rgb888_to_rgb565(r, g, b).to_le_bytes());
             }
-            tokio::fs::write(super::FB_PATH, &raw_buffer).await.unwrap();
+            if let Err(e) = tokio::fs::write(super::FB_PATH, &raw_buffer).await {
+                log::error!("failed to write framebuffer: {e}");
+            }
         }
     }
 
@@ -715,7 +650,7 @@ mod fallback {
         ui_update_rx: Receiver<DisplayState>,
     ) {
         info!("enabling Orbic backlight via {}", super::BL_GPIO_PATH);
-        super::set_backlight(true);
+        std::fs::write(super::BL_GPIO_PATH, "1").ok();
         generic_framebuffer::update_ui(
             task_tracker,
             config,
@@ -728,8 +663,8 @@ mod fallback {
 
 // ── public API: dispatch based on feature ────────────────────────────
 
-#[cfg(feature = "orbic-ui")]
+#[cfg(feature = "tft-ui")]
 pub use ui::update_ui;
 
-#[cfg(not(feature = "orbic-ui"))]
+#[cfg(not(feature = "tft-ui"))]
 pub use fallback::update_ui;

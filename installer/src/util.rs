@@ -42,7 +42,7 @@ pub async fn telnet_send_command_with_output(
     writer.write_all(format!("echo RAYHUNTER_'TELNET'_COMMAND_START; {command}; echo RAYHUNTER_'TELNET'_COMMAND_DONE\r\n").as_bytes()).await?;
 
     let mut read_buf = Vec::new();
-    timeout(Duration::from_secs(10), async {
+    timeout(Duration::from_secs(60), async {
         loop {
             let Ok(byte) = reader.read_u8().await else {
                 break;
@@ -61,7 +61,7 @@ pub async fn telnet_send_command_with_output(
         }
     })
     .await
-    .context("command timed out after 10 seconds")?;
+    .context("command timed out after 60 seconds")?;
     let string = String::from_utf8_lossy(&read_buf);
     let start = string.rfind("RAYHUNTER_TELNET_COMMAND_START");
     let end = string.rfind("RAYHUNTER_TELNET_COMMAND_DONE");
