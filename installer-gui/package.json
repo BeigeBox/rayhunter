@@ -13,6 +13,8 @@
         "format": "prettier --write .",
         "lint": "prettier --check . && eslint .",
         "fix": "eslint --fix .",
+        "test": "vitest run",
+        "test:unit": "vitest",
         "tauri": "tauri"
     },
     "dependencies": {
@@ -37,6 +39,7 @@
         "svelte-check": "^4.4.6",
         "typescript": "~6.0.3",
         "typescript-eslint": "^8.58.2",
-        "vite": "^8.0.9"
+        "vite": "^8.0.9",
+        "vitest": "^4.0.18"
     }
 }

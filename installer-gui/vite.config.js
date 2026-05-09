@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 
@@ -29,5 +29,8 @@ export default defineConfig(async () => ({
             // 3. tell vite to ignore watching `src-tauri`
             ignored: ['**/src-tauri/**'],
         },
+    },
+    test: {
+        include: ['src/**/*.{test,spec}.{js,ts}'],
     },
 }));

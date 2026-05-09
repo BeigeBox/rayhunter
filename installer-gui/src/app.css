@@ -5,3 +5,41 @@
     --color-rayhunter-dark-blue: #3f3da0;
     --color-rayhunter-green: #94ea18;
 }
+
+@keyframes orca-swim {
+    0%,
+    100% {
+        left: 0;
+        transform: scaleX(-1);
+    }
+    49% {
+        left: calc(100% - 3rem);
+        transform: scaleX(-1);
+    }
+    51% {
+        left: calc(100% - 3rem);
+        transform: scaleX(1);
+    }
+    99% {
+        left: 0;
+        transform: scaleX(1);
+    }
+}
+
+.orca-swim {
+    animation: orca-swim 4s ease-in-out infinite;
+}
+
+.terminal-box::-webkit-resizer {
+    background: linear-gradient(
+        135deg,
+        transparent 40%,
+        #6b7280 40%,
+        #6b7280 45%,
+        transparent 45%,
+        transparent 60%,
+        #6b7280 60%,
+        #6b7280 65%,
+        transparent 65%
+    );
+}
