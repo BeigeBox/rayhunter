@@ -46,9 +46,10 @@ jobs:
           # * We are on main
           # * Changes are made to github workflows
           # * A cargo-workspace file changed (lockfile or .cargo), as that could affect any crate anywhere
-          # * Something from the script or dist folder changed (could be gated to installer, but some scripts like build_wpa_supplicant are part of the build process)
+          # * A build-feeding script changed (build-*.sh under scripts/; other scripts like check-installer-markers.sh do not feed builds)
+          # * Anything under dist/ changed (config templates and init scripts are bundled into the release zip)
           # * #build-all was used by the user to explicitly ask for this
-          if [ ${GITHUB_REF} = 'refs/heads/main' ] || git diff --name-only $lcommit..HEAD | grep -qe ^.github/workflows/ -e ^.cargo -e '^Cargo\.lock$' -e '^Cargo\.toml$' -e ^dist/ -e ^scripts/ || git log -1 --format='%s %b' | grep -qF '#build-all'
+          if [ ${GITHUB_REF} = 'refs/heads/main' ] || git diff --name-only $lcommit..HEAD | grep -qe ^.github/workflows/ -e ^.cargo -e '^Cargo\.lock$' -e '^Cargo\.toml$' -e ^dist/ -e '^scripts/build-' || git log -1 --format='%s %b' | grep -qF '#build-all'
           then
             echo "building everything"
             echo code_count=forced >> "$GITHUB_OUTPUT"
@@ -214,6 +215,10 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm run check
+      - run: npm run test
+      - name: Verify installer markers
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/check-installer-markers.sh
 
   windows_installer_check_and_test:
     needs: files_changed

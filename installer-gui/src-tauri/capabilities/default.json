@@ -3,5 +3,17 @@
     "identifier": "default",
     "description": "Capability for the main window",
     "windows": ["main"],
-    "permissions": ["core:default", "opener:default"]
+    "permissions": [
+        "core:default",
+        {
+            "identifier": "opener:allow-open-url",
+            "allow": [
+                { "url": "https://github.com/EFForg/rayhunter/*" },
+                { "url": "https://github.com/EFForg/rayhunter/issues/new*" },
+                { "url": "https://efforg.github.io/rayhunter/*" },
+                { "url": "http://127.0.0.1:*" },
+                { "url": "http://0.0.0.0:*" }
+            ]
+        }
+    ]
 }

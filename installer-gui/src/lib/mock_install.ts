@@ -1,62 +1,22 @@
 import type { InstallerState } from './state.svelte';
-import type { DeviceInfo, ErrorGuidance } from './types';
+import type { DeviceInfo } from './types';
 import { DEVICES } from './devices';
 
 export type MockOutcome =
     | { kind: 'success-verified' }
     | { kind: 'success-unverified' }
-    | { kind: 'failure'; error: ErrorGuidance };
+    | { kind: 'failure'; error: string };
 
-export const FAILURE_SCENARIOS: { label: string; error: ErrorGuidance }[] = [
-    {
-        label: "Can't reach device",
-        error: {
-            title: "Can't reach the device",
-            message: 'Check your WiFi connection and make sure you are connected to the hotspot.',
-        },
-    },
-    {
-        label: 'Wrong password',
-        error: {
-            title: 'Wrong password',
-            message: 'Check the sticker on your device for the correct password.',
-        },
-    },
-    {
-        label: 'USB not detected',
-        error: {
-            title: 'Device not detected',
-            message: 'Try a different USB cable or port.',
-        },
-    },
-    {
-        label: 'Rooting failed',
-        error: {
-            title: 'Rooting failed',
-            message: 'Power-cycle the device and retry.',
-        },
-    },
-    {
-        label: 'File transfer corrupted',
-        error: {
-            title: 'File transfer corrupted',
-            message: 'Retry the installation.',
-        },
-    },
-    {
-        label: 'No SD card',
-        error: {
-            title: 'No SD card found',
-            message: 'Insert a FAT-formatted SD card and retry.',
-        },
-    },
-    {
-        label: 'Generic error',
-        error: {
-            title: 'Something went wrong',
-            message: 'Copy the log and report an issue.',
-        },
-    },
+export const FAILURE_SCENARIOS: { label: string; error: string }[] = [
+    { label: "Can't reach the device", error: 'Failed to reach device at 192.168.1.1' },
+    { label: 'Wrong password', error: 'Login failed: incorrect password' },
+    { label: 'Device not detected', error: 'No Orbic device found' },
+    { label: 'USB device busy', error: 'libusb error: Permission denied (LIBUSB_ERROR_ACCESS)' },
+    { label: 'Rooting failed', error: 'rootshell is not giving us root' },
+    { label: 'File transfer corrupted', error: 'MD5 verification failed' },
+    { label: 'No SD card found', error: 'Unable to determine sdcard path' },
+    { label: 'Installation cancelled', error: 'Installation cancelled.' },
+    { label: 'Something went wrong (generic)', error: 'unknown error' },
 ];
 
 const FAKE_LOG_LINES = [
@@ -95,16 +55,16 @@ export function jump_to(
     }
 
     if (target === 'success-verified') {
-        installer.install_succeeded(dev, true);
+        installer.install_succeeded(true);
         return;
     }
     if (target === 'success-unverified') {
-        installer.install_succeeded(dev, false);
+        installer.install_succeeded(false);
         return;
     }
     if (target.startsWith('failure')) {
         const scenario = FAILURE_SCENARIOS[failureIndex ?? FAILURE_SCENARIOS.length - 1];
-        installer.install_failed(dev, scenario.error);
+        installer.install_failed(scenario.error, []);
         return;
     }
     if (target === 'tplink-overlay') {
@@ -135,7 +95,7 @@ export function mock_run(
         if (step < total_steps) {
             if (outcome.kind === 'failure' && step === fail_step) {
                 installer.append_output(`Error: mock failure triggered\n`);
-                installer.install_failed(device, outcome.error);
+                installer.install_failed(outcome.error, []);
                 clearInterval(timer);
                 return;
             }
@@ -146,9 +106,9 @@ export function mock_run(
         } else {
             clearInterval(timer);
             if (outcome.kind === 'success-verified') {
-                installer.install_succeeded(device, true);
+                installer.install_succeeded(true);
             } else if (outcome.kind === 'success-unverified') {
-                installer.install_succeeded(device, false);
+                installer.install_succeeded(false);
             }
         }
     }, 800);

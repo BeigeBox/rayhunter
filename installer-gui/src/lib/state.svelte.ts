@@ -1,15 +1,29 @@
-import type { DeviceInfo, Screen, InstallStep } from './types';
-import { get_admin_ip } from './devices';
-import { parse_output_line, mark_all_done, mark_active_error } from './output_parser';
+import type {
+    DeviceInfo,
+    InstallMode,
+    InstallStep,
+    Overlay,
+    Screen,
+    StepDefinition,
+} from './types';
+import { build_install_command, type InstallCommand } from './build_args';
+import {
+    create_output_parser,
+    mark_all_done,
+    mark_active_error,
+    type OutputParser,
+} from './output_parser';
 
-export function create_installer_state() {
-    let screen = $state<Screen>({ kind: 'device-select' });
-    let output_log = $state('');
-    let steps = $state<InstallStep[]>([]);
-    let overlay = $state<'tplink-login' | null>(null);
-    let field_values = $state<Record<string, string | boolean>>({});
+export class InstallerState {
+    screen = $state<Screen>({ kind: 'device-select' });
+    output_log = $state('');
+    steps = $state<InstallStep[]>([]);
+    overlay = $state<Overlay | null>(null);
+    field_values = $state<Record<string, string | boolean>>({});
 
-    function select_device(device: DeviceInfo) {
+    private parser: OutputParser = create_output_parser();
+
+    select_device(device: DeviceInfo): void {
         const defaults: Record<string, string | boolean> = {};
         for (const field of device.fields) {
             if (field.default_value !== undefined) {
@@ -18,127 +32,100 @@ export function create_installer_state() {
                 defaults[field.key] = field.type === 'checkbox' ? false : '';
             }
         }
-        field_values = defaults;
-        screen = { kind: 'config', device };
+        this.field_values = defaults;
+        this.screen = { kind: 'config', device };
     }
 
-    function build_args(device: DeviceInfo, mode: 'install' | 'update'): string {
-        const args: string[] = [device.command];
-        for (const field of device.fields) {
-            const val = field_values[field.key];
-            if (field.type === 'checkbox') {
-                if (val && !(mode === 'update' && field.key === 'resetConfig')) {
-                    args.push(field.arg_name);
-                }
-            } else if (val && typeof val === 'string' && val.trim()) {
-                args.push(field.arg_name, val.trim());
-            }
+    build_install_command(): InstallCommand {
+        if (this.screen.kind !== 'config' && this.screen.kind !== 'progress') {
+            throw new Error(`build_install_command called from screen kind '${this.screen.kind}'`);
         }
-        return args.join(' ');
+        const mode = this.screen.kind === 'progress' ? this.screen.mode : 'install';
+        return build_install_command(this.screen.device, this.field_values, mode);
     }
 
-    function start_install(device: DeviceInfo, mode: 'install' | 'update') {
-        const args = build_args(device, mode);
-        output_log = '';
-        steps = device.steps.map((s, i) => ({
-            label:
-                mode === 'update' && s.label === 'Transferring files' ? 'Updating daemon' : s.label,
-            status: i === 0 ? 'active' : 'pending',
-        }));
-        overlay = null;
-        screen = { kind: 'progress', device, args, mode };
+    start_install(device: DeviceInfo, mode: InstallMode): void {
+        const { args } = build_install_command(device, this.field_values, mode);
+        this.output_log = '';
+        this.steps = make_initial_steps(device.steps, mode);
+        this.overlay = null;
+        this.parser = create_output_parser();
+        this.screen = { kind: 'progress', device, args, mode };
     }
 
-    function append_output(text: string) {
-        output_log += text;
-        if (screen.kind !== 'progress') return;
-        const lines = text.split('\n');
-        for (const line of lines) {
-            if (!line.trim()) continue;
-            const prev_steps = steps;
-            const result = parse_output_line(line, steps, screen.device.steps);
-            steps = result.steps;
-            if (result.overlay === 'tplink-login') {
-                overlay = 'tplink-login';
-            }
-            if (overlay === 'tplink-login' && steps !== prev_steps) {
-                overlay = null;
-            }
+    append_output(text: string): void {
+        this.output_log += text;
+        if (this.screen.kind !== 'progress') return;
+        const prev_steps = this.steps;
+        const result = this.parser.feed(text, this.steps, this.screen.device.steps);
+        this.steps = result.steps;
+        if (result.overlay_action) {
+            this.overlay = result.overlay_action;
+        }
+        if (this.overlay?.type === 'tplink_browser' && this.steps !== prev_steps) {
+            this.overlay = null;
         }
     }
 
-    function set_overlay(value: 'tplink-login' | null) {
-        overlay = value;
+    set_overlay(overlay: Overlay): void {
+        this.overlay = overlay;
     }
 
-    function install_succeeded(device: DeviceInfo, verified: boolean) {
-        steps = mark_all_done(steps);
-        const admin_ip = get_admin_ip(field_values);
-        screen = { kind: 'success', device, admin_ip, verified };
+    clear_overlay(): void {
+        this.overlay = null;
     }
 
-    function install_failed(
-        device: DeviceInfo,
-        error_guidance: { title: string; message: string; context?: string[] }
-    ) {
-        steps = mark_active_error(steps);
-        const args = screen.kind === 'progress' ? screen.args : '';
-        screen = {
+    install_succeeded(verified: boolean): void {
+        this.steps = mark_all_done(this.steps);
+        const admin_ip = (this.field_values['adminIp'] as string | undefined) ?? '';
+        this.screen = { kind: 'success', admin_ip, verified };
+    }
+
+    install_failed(error: string, args: string[]): void {
+        if (this.screen.kind !== 'progress') {
+            throw new Error(`install_failed called from screen kind '${this.screen.kind}'`);
+        }
+        const { device, mode } = this.screen;
+        this.steps = mark_active_error(this.steps);
+        this.screen = {
             kind: 'failure',
             device,
-            error: error_guidance,
-            log: output_log,
+            error,
+            log: this.output_log,
             args,
+            mode,
         };
     }
 
-    function retry(device: DeviceInfo, args: string) {
-        output_log = '';
-        steps = device.steps.map((s, i) => ({
-            label: s.label,
-            status: i === 0 ? 'active' : 'pending',
-        }));
-        overlay = null;
-        screen = { kind: 'progress', device, args, mode: 'install' };
+    retry(): void {
+        if (this.screen.kind !== 'failure') {
+            throw new Error(`retry called from screen kind '${this.screen.kind}'`);
+        }
+        const { device, args, mode } = this.screen;
+        this.output_log = '';
+        this.steps = make_initial_steps(device.steps, mode);
+        this.overlay = null;
+        this.parser = create_output_parser();
+        this.screen = { kind: 'progress', device, args, mode };
     }
 
-    function reset() {
-        screen = { kind: 'device-select' };
-        output_log = '';
-        steps = [];
-        overlay = null;
-        field_values = {};
+    reset(): void {
+        this.screen = { kind: 'device-select' };
+        this.output_log = '';
+        this.steps = [];
+        this.overlay = null;
+        this.field_values = {};
+        this.parser = create_output_parser();
     }
-
-    return {
-        get screen() {
-            return screen;
-        },
-        get output_log() {
-            return output_log;
-        },
-        get steps() {
-            return steps;
-        },
-        get overlay() {
-            return overlay;
-        },
-        get field_values() {
-            return field_values;
-        },
-        set field_values(v: Record<string, string | boolean>) {
-            field_values = v;
-        },
-        select_device,
-        build_args,
-        start_install,
-        append_output,
-        set_overlay,
-        install_succeeded,
-        install_failed,
-        retry,
-        reset,
-    };
 }
 
-export type InstallerState = ReturnType<typeof create_installer_state>;
+function make_initial_steps(defs: StepDefinition[], mode: InstallMode): InstallStep[] {
+    return defs.map((s, i) => ({
+        label: mode === 'update' && s.label === 'Transferring files' ? 'Updating daemon' : s.label,
+        status: i === 0 ? 'active' : 'pending',
+    }));
+}
+
+export function create_installer_state(): InstallerState {
+    return new InstallerState();
+}

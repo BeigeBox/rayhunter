@@ -2910,6 +2910,7 @@ dependencies = [
  "tokio",
  "tokio-retry2",
  "tokio-stream",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2920,11 +2921,11 @@ dependencies = [
  "installer",
  "serde",
  "serde_json",
- "shlex",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

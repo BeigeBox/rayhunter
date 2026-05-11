@@ -1,6 +1,7 @@
 use anyhow::{Context, Error};
 use clap::{Parser, Subcommand};
 use env_logger::Env;
+use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_os = "android"))]
 use anyhow::bail;
@@ -273,8 +274,16 @@ struct Serial {
     command: Vec<String>,
 }
 
-async fn run(args: Args) -> Result<(), Error> {
+async fn run(args: Args, cancel_token: CancellationToken) -> Result<(), Error> {
     env_logger::Builder::from_env(Env::default().default_filter_or("off")).init();
+
+    // Cancellation is checked before launching the selected subcommand. Once
+    // started, the per-step async path runs to completion; the outer
+    // `tokio::select!` in `run_with_callback` will surface a cancellation if
+    // the user requests it during that work.
+    if cancel_token.is_cancelled() {
+        anyhow::bail!(CANCELLED_MESSAGE);
+    }
 
     match args.command {
         Command::Tmobile(args) => tmobile::install(args).await.context("Failed to install rayhunter on the Tmobile TMOHS1. Make sure your computer is connected to the hotspot using USB tethering or WiFi.")?,
@@ -347,6 +356,11 @@ async fn run(args: Args) -> Result<(), Error> {
 /// Type alias for output callback function
 pub type OutputCallback = Box<dyn Fn(&str) + Send + Sync>;
 
+/// Error message returned when installation is cancelled via the cancellation token.
+///
+/// Used as a stable string for callers (e.g. the Tauri GUI) to identify cancellation.
+pub const CANCELLED_MESSAGE: &str = "Installation cancelled.";
+
 /// Run the installer with CLI arguments and optional output callback
 ///
 /// # Example
@@ -358,12 +372,19 @@ pub type OutputCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     ["orbic-network", "--admin-password", "12345"],
 ///     Some(Box::new(|output| {
 ///         print!("{}", output);
-///     }))
+///     })),
+///     None,
 /// );
 /// ```
+///
+/// `cancel_token` allows cooperative cancellation. The token is checked between
+/// major install steps (telnet open, file uploads, exploit phases, reboot). Steps
+/// such as an in-flight USB write or a single HTTP request cannot be safely
+/// interrupted; cancellation takes effect at the next yield point.
 pub fn run_with_callback<'a>(
     args: impl IntoIterator<Item = &'a str>,
     callback: Option<OutputCallback>,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<(), Error> {
     let _guard;
     if let Some(cb) = callback {
@@ -376,12 +397,21 @@ pub fn run_with_callback<'a>(
         .context("Failed to create Tokio runtime")?
         .block_on(async {
             let args = std::iter::once("installer").chain(args);
-            match Args::try_parse_from(args) {
-                Ok(parsed_args) => run(parsed_args).await,
+            let parsed_args = match Args::try_parse_from(args) {
+                Ok(parsed) => parsed,
                 Err(e) => {
-                    eprintln!("{}", e);
-                    Ok(())
+                    let kind = e.kind().as_str().unwrap_or("invalid input");
+                    return Err(anyhow::anyhow!(
+                        "Invalid installer arguments ({kind}). See `installer --help` for usage."
+                    ));
                 }
+            };
+
+            let token = cancel_token.unwrap_or_default();
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => Err(anyhow::anyhow!(CANCELLED_MESSAGE)),
+                result = run(parsed_args, token.clone()) => result,
             }
         })
 }
@@ -397,5 +427,5 @@ pub fn version() -> &'static str {
 /// instead.
 pub async fn main_cli() -> Result<(), Error> {
     let args = Args::parse();
-    run(args).await
+    run(args, CancellationToken::new()).await
 }

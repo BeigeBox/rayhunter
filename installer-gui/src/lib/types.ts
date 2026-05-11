@@ -1,11 +1,14 @@
 export type DeviceId =
     | 'orbic'
     | 'orbic-usb'
+    | 'moxee'
     | 'tmobile'
     | 'tplink'
     | 'wingtech'
     | 'uz801'
     | 'pinephone';
+
+export type InstallMode = 'install' | 'update';
 
 export interface FieldConfig {
     key: string;
@@ -29,31 +32,35 @@ export interface DeviceInfo {
     steps: StepDefinition[];
 }
 
+export type StepStatus = 'pending' | 'active' | 'done' | 'error';
+
 export interface InstallStep {
     label: string;
-    status: 'pending' | 'active' | 'done' | 'error';
+    status: StepStatus;
 }
 
 export interface ErrorGuidance {
     title: string;
     message: string;
-    context?: string[];
 }
+
+export type Overlay = { type: 'tplink_browser'; url: string };
 
 export type Screen =
     | { kind: 'device-select' }
     | { kind: 'config'; device: DeviceInfo }
-    | { kind: 'progress'; device: DeviceInfo; args: string; mode: 'install' | 'update' }
     | {
-          kind: 'success';
+          kind: 'progress';
           device: DeviceInfo;
-          admin_ip: string;
-          verified: boolean;
+          args: string[];
+          mode: InstallMode;
       }
+    | { kind: 'success'; admin_ip: string; verified: boolean }
     | {
           kind: 'failure';
           device: DeviceInfo;
-          error: ErrorGuidance;
+          error: string;
           log: string;
-          args: string;
+          args: string[];
+          mode: InstallMode;
       };

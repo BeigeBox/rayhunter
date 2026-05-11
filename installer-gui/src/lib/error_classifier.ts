@@ -7,7 +7,12 @@ interface ErrorPattern {
 }
 
 const PATTERNS: ErrorPattern[] = [
-    // Connection / reachability
+    {
+        match: 'Installation cancelled.',
+        title: 'Installation cancelled',
+        message: 'No changes were made to the device.',
+    },
+
     {
         match: 'Failed to get login info',
         title: "Can't reach the device",
@@ -29,16 +34,17 @@ const PATTERNS: ErrorPattern[] = [
         message: 'Check your connection to the device and retry.',
     },
 
-    // Authentication
     {
         match: 'Login failed: incorrect password',
         title: 'Wrong password',
-        message: 'Check the sticker on your device for the correct password.',
+        message:
+            'The admin password did not work. See https://efforg.github.io/rayhunter/ for the device-specific setup guide.',
     },
     {
         match: 'Login failed with retcode:',
         title: 'Login failed',
-        message: 'Double-check your credentials.',
+        message:
+            'The device rejected the login. Double-check the password. The retcode is the device firmware status code from the login attempt.',
     },
     {
         match: 'login did not return a token in response',
@@ -51,7 +57,6 @@ const PATTERNS: ErrorPattern[] = [
         message: 'This device requires a password to install.',
     },
 
-    // USB device
     {
         match: 'No Orbic device found',
         title: 'Device not detected',
@@ -63,11 +68,6 @@ const PATTERNS: ErrorPattern[] = [
         message: 'Another program is using the device. Close other USB tools and retry.',
     },
     {
-        match: 'Permission denied',
-        title: 'Device is busy',
-        message: 'Another program is using the device. Close other USB tools (like adb) and retry.',
-    },
-    {
         match: 'Timeout waiting for ADB connection',
         title: 'Device not responding',
         message: 'Device not responding after USB debug activation. Retry.',
@@ -75,10 +75,10 @@ const PATTERNS: ErrorPattern[] = [
     {
         match: 'ADB connection error',
         title: 'USB connection error',
-        message: 'Try a different USB cable or port.',
+        message:
+            'On Windows, check the device driver in Device Manager. On Linux or macOS, unplug the device and plug it back in, then retry.',
     },
 
-    // Rooting / telnet
     {
         match: 'Timeout waiting for telnet to become available',
         title: 'Rooting took too long',
@@ -92,10 +92,10 @@ const PATTERNS: ErrorPattern[] = [
     {
         match: 'Bad result code when trying to root device',
         title: 'Rooting failed',
-        message: 'Try a different hardware revision exploit.',
+        message:
+            'This device may be a different hardware revision than expected. Try selecting a different exploit option in advanced settings, or check the device-specific docs at https://efforg.github.io/rayhunter/.',
     },
 
-    // File transfer
     {
         match: 'File transfer unsuccessful',
         title: 'File transfer corrupted',
@@ -106,33 +106,49 @@ const PATTERNS: ErrorPattern[] = [
         title: 'File transfer corrupted',
         message: 'Retry the installation.',
     },
-    {
-        match: 'not found in:',
-        title: 'Command failed on device',
-        message: 'Copy the log and report an issue.',
-    },
 
-    // TP-Link SD card
     {
         match: 'Unable to determine sdcard path',
         title: 'No SD card found',
-        message: 'Insert a FAT-formatted SD card and retry.',
+        message:
+            'Insert a FAT32-formatted SD card into the router. If your device does not have an SD card slot, enable "Skip SD card" in advanced settings.',
     },
     {
         match: 'FAT-formatted SD card',
-        title: 'SD card mount failed',
-        message: 'Make sure the SD card is FAT-formatted.',
+        title: 'SD card not usable',
+        message:
+            'Rayhunter needs a FAT32-formatted SD card. Reformat the card as FAT32 and retry, or enable "Skip SD card" in advanced settings to use internal storage.',
     },
 ];
 
+const USB_HINT_RE = /(LIBUSB_ERROR_ACCESS|libusb|\busb\b)/i;
+
+function strip_secrets(text: string): string {
+    return text
+        .replace(/--admin-password\s+\S+/gi, '--admin-password ***')
+        .replace(/--password\s+\S+/gi, '--password ***')
+        .replace(/--token\s+\S+/gi, '--token ***');
+}
+
 export function classify_error(error_text: string): ErrorGuidance {
+    const safe = strip_secrets(error_text);
+
+    if (safe.includes('Permission denied') && USB_HINT_RE.test(safe)) {
+        return {
+            title: 'USB device is busy',
+            message:
+                'macOS or another program is holding the USB device. Close other USB tools (like adb) and retry. If you have adb installed, try `adb kill-server`.',
+        };
+    }
+
     for (const pattern of PATTERNS) {
-        if (error_text.includes(pattern.match)) {
+        if (safe.includes(pattern.match)) {
             return { title: pattern.title, message: pattern.message };
         }
     }
     return {
         title: 'Something went wrong',
-        message: 'Copy the log and report an issue.',
+        message:
+            'Use the Copy Log and Report Issue buttons below to share details with the maintainers.',
     };
 }

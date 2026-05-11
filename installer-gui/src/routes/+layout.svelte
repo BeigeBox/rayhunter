@@ -7,7 +7,7 @@
 
 <div class="min-h-screen flex flex-col bg-gray-50">
     <Header />
-    <main class="flex-1">
+    <main class="flex-1 overflow-y-auto">
         {@render children()}
     </main>
     <Footer />

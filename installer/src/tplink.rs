@@ -1,8 +1,8 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Error};
+use anyhow::{Context, Error, anyhow};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -24,6 +24,15 @@ use crate::util::{interactive_shell, telnet_send_command, telnet_send_file};
 
 type HttpProxyClient = hyper_util::client::legacy::Client<HttpConnector, Body>;
 
+fn validate_admin_ip(admin_ip: &str) -> Result<(), Error> {
+    if IpAddr::from_str(admin_ip).is_err() {
+        return Err(anyhow!(
+            "admin_ip must be a valid IP address, got {admin_ip:?}"
+        ));
+    }
+    Ok(())
+}
+
 pub async fn main_tplink(
     InstallTpLink {
         skip_sdcard,
@@ -33,6 +42,7 @@ pub async fn main_tplink(
         data_dir,
     }: InstallTpLink,
 ) -> Result<(), Error> {
+    validate_admin_ip(&admin_ip)?;
     let is_v3 = start_telnet(&admin_ip).await?;
     tplink_run_install(
         skip_sdcard,
@@ -51,6 +61,7 @@ struct V3RootResponse {
 }
 
 pub async fn start_telnet(admin_ip: &str) -> Result<bool, Error> {
+    validate_admin_ip(admin_ip)?;
     let client = reqwest::Client::new();
     let addr = SocketAddr::from_str(&format!("{admin_ip}:23")).unwrap();
 
@@ -387,6 +398,7 @@ fn get_rayhunter_daemon(sdcard_path: Option<&str>) -> String {
 
 /// Root the TP-Link device and open an interactive shell
 pub async fn shell(admin_ip: &str) -> Result<(), Error> {
+    validate_admin_ip(admin_ip)?;
     start_telnet(admin_ip).await?;
     interactive_shell(admin_ip, 23, true).await
 }
@@ -399,4 +411,13 @@ fn test_get_rayhunter_daemon() {
     let s = get_rayhunter_daemon(None);
     assert!(!s.contains("mmcblk0p1"));
     assert!(!s.contains("#RAYHUNTER-PRESTART"));
+}
+
+#[test]
+fn test_validate_admin_ip() {
+    assert!(validate_admin_ip("192.168.0.1").is_ok());
+    assert!(validate_admin_ip("::1").is_ok());
+    assert!(validate_admin_ip("example.com").is_err());
+    assert!(validate_admin_ip("192.168.0.1; rm -rf /").is_err());
+    assert!(validate_admin_ip("").is_err());
 }

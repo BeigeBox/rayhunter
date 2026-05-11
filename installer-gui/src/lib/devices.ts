@@ -1,4 +1,4 @@
-import type { DeviceId, DeviceInfo } from './types';
+import type { DeviceInfo, InstallMode } from './types';
 
 export const DEVICES: DeviceInfo[] = [
     {
@@ -63,6 +63,49 @@ export const DEVICES: DeviceInfo[] = [
             { label: 'Transferring files', marker: 'Installing rootshell' },
             { label: 'Rebooting', marker: 'Waiting for reboot' },
             { label: 'Verifying', marker: 'Testing rayhunter' },
+        ],
+    },
+    {
+        id: 'moxee',
+        label: 'Moxee Hotspot',
+        command: 'moxee',
+        fields: [
+            {
+                key: 'adminPassword',
+                label: 'Admin Password',
+                type: 'password',
+                arg_name: '--admin-password',
+            },
+            {
+                key: 'adminUsername',
+                label: 'Admin Username',
+                type: 'text',
+                default_value: 'admin',
+                arg_name: '--admin-username',
+                advanced: true,
+            },
+            {
+                key: 'adminIp',
+                label: 'Admin IP',
+                type: 'text',
+                default_value: '192.168.1.1',
+                arg_name: '--admin-ip',
+                advanced: true,
+            },
+            {
+                key: 'resetConfig',
+                label: 'Reset config to defaults',
+                type: 'checkbox',
+                default_value: false,
+                arg_name: '--reset-config',
+            },
+        ],
+        steps: [
+            { label: 'Connecting', marker: 'Logging in and starting telnet' },
+            { label: 'Rooting', marker: 'Waiting for telnet to become available' },
+            { label: 'Transferring files', marker: 'Sending file' },
+            { label: 'Rebooting', marker: 'Installation complete. Rebooting' },
+            { label: 'Verifying', marker: null },
         ],
     },
     {
@@ -198,10 +241,12 @@ export const DEVICES: DeviceInfo[] = [
     },
 ];
 
-export function get_device(id: DeviceId): DeviceInfo | undefined {
-    return DEVICES.find((d) => d.id === id);
-}
-
-export function get_admin_ip(field_values: Record<string, string | boolean>): string {
-    return (field_values['adminIp'] as string) || '';
-}
+// Restricts a field to specific install modes. Keyed by `<device_id>.<field_key>`.
+// Stream 4 reads this when rendering ConfigForm and constructing args; fields
+// without an entry apply to every mode.
+export const FIELD_APPLIES_TO: Record<string, ReadonlyArray<InstallMode>> = {
+    'orbic.resetConfig': ['install'],
+    'orbic-usb.resetConfig': ['install'],
+    'moxee.resetConfig': ['install'],
+    'tplink.resetConfig': ['install'],
+};

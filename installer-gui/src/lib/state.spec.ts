@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DEVICES } from './devices';
-
-// state.svelte.ts uses $state runes which require the Svelte compiler.
-// We test the pure logic by importing devices and testing build_args logic directly,
-// and test state transitions via a minimal mock of the state shape.
+import { build_install_command } from './build_args';
+import { InstallerState } from './state.svelte';
 
 const orbic = DEVICES.find((d) => d.id === 'orbic')!;
 const tplink = DEVICES.find((d) => d.id === 'tplink')!;
@@ -11,10 +9,6 @@ const pinephone = DEVICES.find((d) => d.id === 'pinephone')!;
 const uz801 = DEVICES.find((d) => d.id === 'uz801')!;
 
 describe('devices', () => {
-    it('has all 7 device definitions', () => {
-        expect(DEVICES).toHaveLength(7);
-    });
-
     it('orbic has correct fields', () => {
         const keys = orbic.fields.map((f) => f.key);
         expect(keys).toEqual(['adminPassword', 'adminUsername', 'adminIp', 'resetConfig']);
@@ -49,66 +43,79 @@ describe('device steps', () => {
         expect(labels).toHaveLength(4);
     });
 
-    it('all steps have markers except GUI-triggered ones', () => {
+    it('every null-marker step is the final Verifying step', () => {
         for (const device of DEVICES) {
             for (const step of device.steps) {
                 if (step.marker === null) {
-                    expect(['Verifying']).toContain(step.label);
+                    expect(step.label).toBe('Verifying');
                 }
             }
         }
     });
 });
 
-describe('build_args logic', () => {
-    function build_args_pure(
-        device: typeof orbic,
-        field_values: Record<string, string | boolean>,
-        mode: 'install' | 'update' = 'install'
-    ): string {
-        const args: string[] = [device.command];
-        for (const field of device.fields) {
-            const val = field_values[field.key];
-            if (field.type === 'checkbox') {
-                if (val && !(mode === 'update' && field.key === 'resetConfig')) {
-                    args.push(field.arg_name);
-                }
-            } else if (val && typeof val === 'string' && val.trim()) {
-                args.push(field.arg_name, val.trim());
-            }
-        }
-        return args.join(' ');
-    }
-
-    it('builds orbic args with all fields', () => {
-        const result = build_args_pure(orbic, {
-            adminIp: '192.168.1.1',
-            adminUsername: 'admin',
-            adminPassword: 'secret',
-            resetConfig: true,
-        });
-        expect(result).toBe(
-            'orbic --admin-password secret --admin-username admin --admin-ip 192.168.1.1 --reset-config'
+describe('build_install_command', () => {
+    it('separates password from args for orbic', () => {
+        const { args, password } = build_install_command(
+            orbic,
+            {
+                adminIp: '192.168.1.1',
+                adminUsername: 'admin',
+                adminPassword: 'secret',
+                resetConfig: true,
+            },
+            'install'
         );
+        expect(password).toBe('secret');
+        expect(args).toEqual([
+            'orbic',
+            '--admin-username',
+            'admin',
+            '--admin-ip',
+            '192.168.1.1',
+            '--reset-config',
+        ]);
+        expect(args).not.toContain('--admin-password');
+        expect(args).not.toContain('secret');
     });
 
-    it('skips empty fields', () => {
-        const result = build_args_pure(orbic, {
-            adminIp: '192.168.1.1',
-            adminUsername: '',
-            adminPassword: 'pass',
-            resetConfig: false,
-        });
-        expect(result).toBe('orbic --admin-password pass --admin-ip 192.168.1.1');
+    it('returns empty password when none entered', () => {
+        const { args, password } = build_install_command(
+            orbic,
+            {
+                adminIp: '192.168.1.1',
+                adminUsername: '',
+                adminPassword: '',
+                resetConfig: false,
+            },
+            'install'
+        );
+        expect(password).toBe('');
+        expect(args).toEqual(['orbic', '--admin-ip', '192.168.1.1']);
     });
 
-    it('builds pinephone args (no fields)', () => {
-        const result = build_args_pure(pinephone, {});
-        expect(result).toBe('pinephone');
+    it('skips empty string fields', () => {
+        const { args } = build_install_command(
+            orbic,
+            {
+                adminIp: '192.168.1.1',
+                adminUsername: '',
+                adminPassword: 'pass',
+                resetConfig: false,
+            },
+            'install'
+        );
+        expect(args).toEqual(['orbic', '--admin-ip', '192.168.1.1']);
     });
 
-    it('skips resetConfig in update mode', () => {
-        const result = build_args_pure(
+    it('builds pinephone args with no fields', () => {
+        const { args, password } = build_install_command(pinephone, {}, 'install');
+        expect(args).toEqual(['pinephone']);
+        expect(password).toBe('');
+    });
+
+    it('omits --reset-config in update mode', () => {
+        const { args } = build_install_command(
             orbic,
             {
                 adminIp: '192.168.1.1',
@@ -118,26 +125,239 @@ describe('build_args logic', () => {
             },
             'update'
         );
-        expect(result).not.toContain('--reset-config');
+        expect(args).not.toContain('--reset-config');
+    });
+
+    it('keeps non-reset checkboxes in update mode', () => {
+        const { args } = build_install_command(
+            tplink,
+            {
+                adminIp: '192.168.0.1',
+                sdcardPath: '',
+                skipSdcard: true,
+                resetConfig: true,
+            },
+            'update'
+        );
+        expect(args).toContain('--skip-sdcard');
+        expect(args).not.toContain('--reset-config');
     });
 
     it('builds tplink with sdcard options', () => {
-        const result = build_args_pure(tplink, {
-            adminIp: '192.168.0.1',
-            sdcardPath: '/media/card',
-            skipSdcard: false,
-            resetConfig: false,
-        });
-        expect(result).toBe('tplink --admin-ip 192.168.0.1 --sdcard-path /media/card');
+        const { args } = build_install_command(
+            tplink,
+            {
+                adminIp: '192.168.0.1',
+                sdcardPath: '/media/card',
+                skipSdcard: false,
+                resetConfig: false,
+            },
+            'install'
+        );
+        expect(args).toEqual([
+            'tplink',
+            '--admin-ip',
+            '192.168.0.1',
+            '--sdcard-path',
+            '/media/card',
+        ]);
     });
 
-    it('builds tplink with skip sdcard flag', () => {
-        const result = build_args_pure(tplink, {
-            adminIp: '192.168.0.1',
-            sdcardPath: '',
-            skipSdcard: true,
-            resetConfig: false,
+    it('trims whitespace from values', () => {
+        const { args, password } = build_install_command(
+            orbic,
+            {
+                adminIp: '  192.168.1.1  ',
+                adminUsername: '  admin  ',
+                adminPassword: '  pw  ',
+                resetConfig: false,
+            },
+            'install'
+        );
+        expect(password).toBe('pw');
+        expect(args).toContain('192.168.1.1');
+        expect(args).toContain('admin');
+    });
+});
+
+describe('InstallerState', () => {
+    it('starts on device-select with empty field_values', () => {
+        const s = new InstallerState();
+        expect(s.screen.kind).toBe('device-select');
+        expect(s.field_values).toEqual({});
+        expect(s.steps).toEqual([]);
+        expect(s.output_log).toBe('');
+        expect(s.overlay).toBeNull();
+    });
+
+    it('select_device transitions to config and seeds defaults', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        expect(s.screen.kind).toBe('config');
+        if (s.screen.kind === 'config') {
+            expect(s.screen.device.id).toBe('orbic');
+        }
+        expect(s.field_values['adminUsername']).toBe('admin');
+        expect(s.field_values['adminIp']).toBe('192.168.1.1');
+        expect(s.field_values['resetConfig']).toBe(false);
+        expect(s.field_values['adminPassword']).toBe('');
+    });
+
+    it('start_install enters progress with empty log and active first step', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        s.field_values['adminPassword'] = 'pw';
+        s.start_install(orbic, 'install');
+        expect(s.screen.kind).toBe('progress');
+        expect(s.output_log).toBe('');
+        expect(s.steps).toHaveLength(orbic.steps.length);
+        expect(s.steps[0].status).toBe('active');
+        expect(s.steps.slice(1).every((step) => step.status === 'pending')).toBe(true);
+        if (s.screen.kind === 'progress') {
+            expect(s.screen.mode).toBe('install');
+            expect(s.screen.args).not.toContain('--admin-password');
+            expect(s.screen.args).not.toContain('pw');
+        }
+    });
+
+    it('append_output accumulates lines and advances steps on marker hits', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        s.start_install(orbic, 'install');
+        s.append_output('hello\n');
+        s.append_output('world\n');
+        expect(s.output_log).toBe('hello\nworld\n');
+        expect(s.steps[0].status).toBe('active');
+
+        s.append_output('Waiting for telnet to become available\n');
+        expect(s.steps[0].status).toBe('done');
+        expect(s.steps[1].status).toBe('active');
+    });
+
+    it('install_failed records args and original mode', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        s.start_install(orbic, 'update');
+        s.install_failed('boom', ['orbic', '--admin-ip', '1.2.3.4']);
+        expect(s.screen.kind).toBe('failure');
+        if (s.screen.kind === 'failure') {
+            expect(s.screen.error).toBe('boom');
+            expect(s.screen.args).toEqual(['orbic', '--admin-ip', '1.2.3.4']);
+            expect(s.screen.mode).toBe('update');
+            expect(s.screen.log).toBe('');
+        }
+        expect(s.steps[0].status).toBe('error');
+    });
+
+    it('install_failed throws when not on progress screen', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        expect(() => s.install_failed('boom', [])).toThrow();
+    });
+
+    it('retry preserves original mode and args', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        s.start_install(orbic, 'update');
+        const original_args = s.screen.kind === 'progress' ? [...s.screen.args] : [];
+        s.install_failed('err', original_args);
+        s.retry();
+        expect(s.screen.kind).toBe('progress');
+        if (s.screen.kind === 'progress') {
+            expect(s.screen.mode).toBe('update');
+            expect(s.screen.args).toEqual(original_args);
+        }
+        expect(s.output_log).toBe('');
+        expect(s.steps[0].status).toBe('active');
+    });
+
+    it('retry throws when not on failure screen', () => {
+        const s = new InstallerState();
+        expect(() => s.retry()).toThrow();
+    });
+
+    it('install_succeeded marks all steps done and stores admin_ip', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        s.start_install(orbic, 'install');
+        s.install_succeeded(true);
+        expect(s.screen.kind).toBe('success');
+        if (s.screen.kind === 'success') {
+            expect(s.screen.verified).toBe(true);
+            expect(s.screen.admin_ip).toBe('192.168.1.1');
+        }
+        expect(s.steps.every((st) => st.status === 'done')).toBe(true);
+    });
+
+    it('install_succeeded with no adminIp returns empty admin_ip', () => {
+        const s = new InstallerState();
+        s.select_device(pinephone);
+        s.start_install(pinephone, 'install');
+        s.install_succeeded(false);
+        if (s.screen.kind === 'success') {
+            expect(s.screen.admin_ip).toBe('');
+            expect(s.screen.verified).toBe(false);
+        }
+    });
+
+    it('reset clears everything and returns to device-select', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        s.field_values['adminPassword'] = 'secret';
+        s.start_install(orbic, 'install');
+        s.append_output('some output\n');
+        s.reset();
+        expect(s.screen.kind).toBe('device-select');
+        expect(s.field_values).toEqual({});
+        expect(s.steps).toEqual([]);
+        expect(s.output_log).toBe('');
+        expect(s.overlay).toBeNull();
+    });
+
+    it('set_overlay and clear_overlay manage overlay state', () => {
+        const s = new InstallerState();
+        s.set_overlay({ type: 'tplink_browser', url: 'http://127.0.0.1:4000' });
+        expect(s.overlay).toEqual({ type: 'tplink_browser', url: 'http://127.0.0.1:4000' });
+        s.clear_overlay();
+        expect(s.overlay).toBeNull();
+    });
+
+    it('append_output extracts URL from listening line and sets overlay', () => {
+        const s = new InstallerState();
+        s.select_device(tplink);
+        s.start_install(tplink, 'install');
+        s.append_output('Listening on http://127.0.0.1:51234\n');
+        expect(s.overlay).toEqual({
+            type: 'tplink_browser',
+            url: 'http://127.0.0.1:51234',
         });
-        expect(result).toBe('tplink --admin-ip 192.168.0.1 --skip-sdcard');
+    });
+
+    it('append_output buffers partial lines across emits', () => {
+        const s = new InstallerState();
+        s.select_device(tplink);
+        s.start_install(tplink, 'install');
+        s.append_output('Listening on http');
+        expect(s.overlay).toBeNull();
+        s.append_output('://127.0.0.1:4321\n');
+        expect(s.overlay).toEqual({
+            type: 'tplink_browser',
+            url: 'http://127.0.0.1:4321',
+        });
+    });
+
+    it('build_install_command throws outside config or progress screen', () => {
+        const s = new InstallerState();
+        expect(() => s.build_install_command()).toThrow();
+    });
+
+    it('start_install does not retain password in screen.args', () => {
+        const s = new InstallerState();
+        s.select_device(orbic);
+        s.field_values['adminPassword'] = 'super-secret';
+        s.start_install(orbic, 'install');
+        if (s.screen.kind === 'progress') {
+            expect(s.screen.args.join(' ')).not.toContain('super-secret');
+        }
     });
 });

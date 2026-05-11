@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -17,6 +17,13 @@ use crate::util::{interactive_shell, telnet_send_command, telnet_send_file};
 
 // Some kajeet devices have password protected telnetd on port 23, so we use port 24 just in case
 const TELNET_PORT: u16 = 24;
+
+fn validate_admin_ip(admin_ip: &str) -> Result<()> {
+    if IpAddr::from_str(admin_ip).is_err() {
+        bail!("admin_ip must be a valid IP address, got {admin_ip:?}");
+    }
+    Ok(())
+}
 
 #[derive(Deserialize, Debug)]
 struct ExploitResponse {
@@ -149,6 +156,8 @@ pub async fn start_telnet(
     admin_username: &str,
     admin_password: Option<&str>,
 ) -> Result<()> {
+    validate_admin_ip(admin_ip)?;
+
     let Some(admin_password) = admin_password else {
         anyhow::bail!("--admin-password is required");
     };
@@ -167,6 +176,8 @@ pub async fn install(
     reset_config: bool,
     data_dir: Option<String>,
 ) -> Result<()> {
+    validate_admin_ip(&admin_ip)?;
+
     let Some(admin_password) = admin_password else {
         eprintln!(
             "As of version 0.8.0, the orbic installer has been rewritten and now requires an --admin-password parameter."
@@ -309,9 +320,25 @@ pub async fn shell(
     admin_username: &str,
     admin_password: Option<&str>,
 ) -> Result<()> {
+    validate_admin_ip(admin_ip)?;
+
     start_telnet(admin_ip, admin_username, admin_password).await?;
     eprintln!(
         "This terminal is fairly limited. The shell prompt may not be visible, but it still accepts commands."
     );
     interactive_shell(admin_ip, TELNET_PORT, false).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_admin_ip() {
+        assert!(validate_admin_ip("192.168.1.1").is_ok());
+        assert!(validate_admin_ip("::1").is_ok());
+        assert!(validate_admin_ip("example.com").is_err());
+        assert!(validate_admin_ip("192.168.1.1/../foo").is_err());
+        assert!(validate_admin_ip("").is_err());
+    }
 }

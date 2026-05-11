@@ -1,5 +1,5 @@
 <div class="p-4 xl:px-8 bg-rayhunter-blue drop-shadow flex flex-row justify-between items-center">
-    <img src="/rayhunter_text.png" alt="" class="h-10 xl:h-12" />
+    <img src="/rayhunter_text.png" alt="Rayhunter" class="h-10 xl:h-12" />
     <div class="flex flex-row gap-4">
         <a
             class="flex flex-row gap-1 group"
